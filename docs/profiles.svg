@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" width="1200" height="360" role="img" aria-labelledby="t d">
-  <title id="t">Guard profiles — one click between bar layouts</title>
+  <title id="t">OmaGuard profiles — one click between bar layouts</title>
   <desc id="d">Three starred profile chips; switching moves widgets between bar sections through the shell's own IPC, one widget at a time.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">

@@ -5,29 +5,29 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
-// Guard — a shield in the bar that knows what your desktop used to look like.
+// OmaGuard — a shield in the bar that knows what your desktop used to look like.
 //
 //   󰕥 holding     every preference you marked still reads the way you left it
 //   󰻌 drift       something moved since the reference you accepted
 //   󰦝 broken      a preference you protect is gone, or Hyprland is erroring
-//   󰞀 unknown     Guard has not been told what "correct" is yet
+//   󰞀 unknown     OmaGuard has not been told what "correct" is yet
 //
-// The shield is the glance; the panel is the record. Guard owns its own data:
-// it runs guard.py itself rather than going through a service, because under a
+// The shield is the glance; the panel is the record. OmaGuard owns its own data:
+// it runs omaguard.py itself rather than going through a service, because under a
 // third-party bar `bar.shell.serviceFor()` returns null for every id — a
 // plugin's own service included — and nothing logs when it does.
 //
-// Guard never writes desktop config. Restores are previews: a before, an
+// OmaGuard never writes desktop config. Restores are previews: a before, an
 // after, and the hash the current file must still have for that plan to mean
 // anything. Applying it stays a human decision.
 Panel {
     id: root
-    moduleName: "nixfred.guard"
+    moduleName: "nixfred.omaguard"
     manageIpc: false
     implicitWidth: barButton.implicitWidth
     implicitHeight: barButton.implicitHeight
 
-    readonly property string version: "1.1.0"
+    readonly property string version: "1.2.0"
     property var state: ({})
     property string lastError: ""
     property bool busy: false
@@ -42,7 +42,7 @@ Panel {
     readonly property bool hasReference: !!state.baseline
 
     // ── What the shield says ──────────────────────────────────────────────
-    // Only a check Guard actually resolved can change the verdict. "unknown"
+    // Only a check OmaGuard actually resolved can change the verdict. "unknown"
     // never reads as healthy, and it never reads as an alarm either.
     readonly property var broken: checks.filter(function (c) { return c.status === "broken" })
     readonly property var drifted: checks.filter(function (c) { return c.status === "drift" })
@@ -66,7 +66,7 @@ Panel {
         fault: Color.urgent
     })[verdict]
     readonly property string headline: {
-        if (verdict === "fault") return "Guard could not run"
+        if (verdict === "fault") return "OmaGuard could not run"
         if (verdict === "broken") return broken.length + " protected preference" + (broken.length === 1 ? "" : "s") + " broken"
         if (verdict === "drift") return (changedFiles || drifted.length) + " change" + ((changedFiles || drifted.length) === 1 ? "" : "s") + " since your reference"
         if (verdict === "unknown") return latest ? "No reference accepted yet" : "No capture yet"
@@ -101,7 +101,7 @@ Panel {
     }
 
     // ── The engine ────────────────────────────────────────────────────────
-    property string helper: decodeURIComponent(String(Qt.resolvedUrl("guard.py")).replace(/^file:\/\/(localhost)?/, ""))
+    property string helper: decodeURIComponent(String(Qt.resolvedUrl("omaguard.py")).replace(/^file:\/\/(localhost)?/, ""))
     property string pendingKind: ""
     property string outText: ""
     property string errText: ""
@@ -160,13 +160,13 @@ Panel {
         watchdog.stop()
         var kind = pendingKind
         try {
-            if (timedOut) throw new Error("guard.py timed out. Nothing was changed.")
+            if (timedOut) throw new Error("omaguard.py timed out. Nothing was changed.")
             if (!outText.trim()) {
                 // A missing python3 is exit 127 with no stdout — the silent
                 // outage that makes a widget look calm while it is dead.
                 throw new Error(exitCode === 127
-                    ? "python3 was not found on PATH, so Guard cannot read anything."
-                    : (errText.trim() || "guard.py produced no output (exit " + exitCode + ")"))
+                    ? "python3 was not found on PATH, so OmaGuard cannot read anything."
+                    : (errText.trim() || "omaguard.py produced no output (exit " + exitCode + ")"))
             }
             var result = JSON.parse(outText)
             if (result.error) throw new Error(result.error)
@@ -215,7 +215,7 @@ Panel {
     }
 
     IpcHandler {
-        target: "nixfred.guard"
+        target: "nixfred.omaguard"
         function open(): void { root.open() }
         function close(): void { root.close() }
         function toggle(): void { root.toggle() }
@@ -248,7 +248,7 @@ Panel {
         text: root.glyph + (root.verdict === "drift" || root.verdict === "broken"
                             ? " " + Math.max(root.changedFiles, root.broken.length + root.drifted.length) : "")
         foreground: root.tint
-        tooltipText: "Guard · " + root.headline + "\n"
+        tooltipText: "OmaGuard · " + root.headline + "\n"
                      + (root.latest ? "Last capture " + root.shortTime(root.latest.time) : "Never captured")
                      + (root.activeProfile ? "\nProfile: " + root.activeProfile.name : "")
                      + "\nClick for profiles and the timeline"
@@ -292,7 +292,7 @@ Panel {
                         width: parent.width - 36 - scanButton.width - 20
                         spacing: 2
                         Text {
-                            text: "GUARD"
+                            text: "OMAGUARD"
                             color: root.ink
                             font.family: Style.font.family
                             font.pixelSize: 19
@@ -323,7 +323,7 @@ Panel {
                           + "  ·  " + root.timeline.length + " kept"
                           + "  ·  " + root.kb(root.state.storage ? root.state.storage.bytes : 0) + " on disk"
                           + (root.hasReference ? "" : "  ·  no reference accepted")
-                        : "Guard has not captured this machine yet."
+                        : "OmaGuard has not captured this machine yet."
                     color: root.muted
                     font.pixelSize: 11
                     wrapMode: Text.Wrap
@@ -728,7 +728,7 @@ Panel {
             Text {
                 id: footer
                 anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
-                text: "Guard " + root.version + " · reads six config files, writes only its own state · "
+                text: "OmaGuard " + root.version + " · reads six config files, writes only its own state · "
                       + "every restore is a preview, never applied"
                 color: root.muted
                 font.pixelSize: 10

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""guard.py — Guard's whole engine. python3 stdlib only, no pip, no bun.
+"""omaguard.py — OmaGuard's whole engine. python3 stdlib only, no pip, no bun.
 
-Guard answers one question: *what changed in my desktop, and does what I
+OmaGuard answers one question: *what changed in my desktop, and does what I
 chose on purpose still hold?* It captures six allowlisted config files,
 keeps a private timeline of every capture, compares the live compositor
 against what is saved on disk, and can show a precise before/after for a
 recovery.
 
-Guard NEVER writes desktop config. Every restore is a PREVIEW. The only
-thing it writes is its own state under ~/.local/state/guard (0700/0600).
+OmaGuard NEVER writes desktop config. Every restore is a PREVIEW. The only
+thing it writes is its own state under ~/.local/state/omaguard (0700/0600).
 
 Subcommands (all print one JSON object on stdout):
   scan                        capture now, append to the timeline
@@ -35,7 +35,7 @@ import uuid
 from pathlib import Path
 
 # ── Scope ────────────────────────────────────────────────────────────────
-# Six files, named explicitly. Guard has no "read any path" mode: an
+# Six files, named explicitly. OmaGuard has no "read any path" mode: an
 # identifier the user cannot influence maps to a path, or nothing happens.
 FILES: dict[str, str] = {
     "hyprland": "hypr/hyprland.lua",
@@ -58,11 +58,11 @@ MAX_STORED = 16 << 20       # 16 MiB per stored snapshot
 RUNTIME_TIMEOUT = 2.0       # seconds per runtime probe
 UUID4 = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
-HOME = Path(os.environ.get("GUARD_HOME") or Path.home())
-STATE = Path(os.environ.get("GUARD_STATE") or (HOME / ".local/state/guard"))
+HOME = Path(os.environ.get("OMAGUARD_HOME") or Path.home())
+STATE = Path(os.environ.get("OMAGUARD_STATE") or (HOME / ".local/state/omaguard"))
 
 
-class GuardError(Exception):
+class OmaGuardError(Exception):
     """Anything the user should be told about, verbatim."""
 
 
@@ -81,14 +81,25 @@ def diff_text(a: str, b: str) -> str:
 
 
 # ── Private state ────────────────────────────────────────────────────────
+LEGACY_STATE = HOME / ".local/state/guard"
+
+
 def secure_state() -> Path:
-    """0700 state dir that must not overlap the config Guard watches."""
+    """0700 state dir that must not overlap the config OmaGuard watches."""
+    # Renamed from Guard in 1.2.0. Carry the existing timeline and profiles
+    # across once, by rename on the same filesystem, rather than start a new
+    # empty history beside the old one. Only for the default location: an
+    # explicit OMAGUARD_STATE is never moved or merged.
+    if (not os.environ.get("OMAGUARD_STATE") and LEGACY_STATE.is_dir()
+            and not LEGACY_STATE.is_symlink() and not STATE.exists()):
+        STATE.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(LEGACY_STATE, STATE)
     state, home = STATE.resolve(), HOME.resolve()
     if state == home or str(state).startswith(str(home / ".config") + os.sep):
-        raise GuardError("Guard state must not live inside the config it watches")
+        raise OmaGuardError("OmaGuard state must not live inside the config it watches")
     state.mkdir(mode=0o700, parents=True, exist_ok=True)
     if state.is_symlink():
-        raise GuardError("Guard state directory is a symlink")
+        raise OmaGuardError("OmaGuard state directory is a symlink")
     os.chmod(state, 0o700)
     return state
 
@@ -98,7 +109,7 @@ def read_own(path: Path) -> str:
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_STORED:
-            raise GuardError("Stored file is not a regular file, or is too large")
+            raise OmaGuardError("Stored file is not a regular file, or is too large")
         return os.read(fd, MAX_STORED).decode("utf-8", "replace")
     finally:
         os.close(fd)
@@ -107,7 +118,7 @@ def read_own(path: Path) -> str:
 def write_own(name: str, value: object) -> None:
     """Atomic 0600 write: temp file in the same dir, then rename."""
     state = secure_state()
-    fd, tmp = tempfile.mkstemp(dir=state, prefix=".guard-", suffix=".tmp")
+    fd, tmp = tempfile.mkstemp(dir=state, prefix=".omaguard-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as fh:
             json.dump(value, fh, indent=2)
@@ -121,30 +132,30 @@ def write_own(name: str, value: object) -> None:
 # ── Capture ──────────────────────────────────────────────────────────────
 def read_config(file_id: str) -> dict:
     """Read one allowlisted file. A symlink anywhere on the path is refused:
-    Guard must never be walked out of ~/.config by a link."""
+    OmaGuard must never be walked out of ~/.config by a link."""
     if file_id not in FILES:
-        raise GuardError("Unknown file identifier")
+        raise OmaGuardError("Unknown file identifier")
     path = HOME / ".config" / FILES[file_id]
     try:
         walk = HOME
         for part in Path(".config", FILES[file_id]).parts:
             walk = walk / part
             if walk.is_symlink():
-                raise GuardError("Symlink rejected")
+                raise OmaGuardError("Symlink rejected")
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         try:
             st = os.fstat(fd)
             if not stat.S_ISREG(st.st_mode):
-                raise GuardError("Not a regular file")
+                raise OmaGuardError("Not a regular file")
             if st.st_size > MAX_FILE:
-                raise GuardError("Exceeds 1 MiB")
+                raise OmaGuardError("Exceeds 1 MiB")
             text = os.read(fd, MAX_FILE).decode("utf-8", "replace")
         finally:
             os.close(fd)
         return {"status": "present", "text": text, "hash": sha(text)}
     except FileNotFoundError:
         return {"status": "missing", "reason": "File not present on this machine"}
-    except (GuardError, OSError) as exc:
+    except (OmaGuardError, OSError) as exc:
         return {"status": "unavailable", "reason": str(exc) or "Unreadable"}
 
 
@@ -157,7 +168,7 @@ def run(args: list[str]) -> str:
         text=True,
     )
     if proc.returncode != 0:
-        raise GuardError("Command failed")
+        raise OmaGuardError("Command failed")
     return proc.stdout
 
 
@@ -185,13 +196,13 @@ def observe_runtime() -> dict:
                     if "=" in line
                 )
                 if data.get("LoadState") != "loaded":
-                    raise GuardError("Service not loaded")
+                    raise OmaGuardError("Service not loaded")
             else:
                 data = json.loads(raw)
                 if key in ("binds", "configerrors") and not isinstance(data, list):
-                    raise GuardError("Unexpected runtime schema")
+                    raise OmaGuardError("Unexpected runtime schema")
                 if key == "devices" and not isinstance(data.get("keyboards"), list):
-                    raise GuardError("Unexpected device schema")
+                    raise OmaGuardError("Unexpected device schema")
             out[key] = {"status": "available", "data": data}
         except Exception:
             out[key] = {
@@ -212,7 +223,7 @@ LUA_NOISE = re.compile(
 
 def lua_text(text: str) -> str:
     """Strip Lua comments while preserving quoted strings. This is a lexical
-    filter, nothing more. Guard never executes Lua and never claims to know
+    filter, nothing more. OmaGuard never executes Lua and never claims to know
     what the file would do when loaded."""
     return LUA_NOISE.sub(lambda m: "" if m.group(0).startswith("--") else m.group(0), text)
 
@@ -286,9 +297,9 @@ def bar_widgets(shell_facts: dict) -> list[str]:
 
 
 def build_checks(facts: dict, runtime: dict) -> list[dict]:
-    """Each check carries its own certainty. 'evidence' means Guard read it in
-    a file; 'observed' means Guard asked the running system; 'unknown' means
-    Guard could not tell — which is never reported as a pass."""
+    """Each check carries its own certainty. 'evidence' means OmaGuard read it in
+    a file; 'observed' means OmaGuard asked the running system; 'unknown' means
+    OmaGuard could not tell — which is never reported as a pass."""
     checks: list[dict] = []
 
     def add(name, status, detail, protected=False):
@@ -341,7 +352,7 @@ def build_checks(facts: dict, runtime: dict) -> list[dict]:
         # false alarm, and false alarms are how a drift tool gets ignored.
         add("Live Ctrl clipboard handlers", "n/a",
             "No Ctrl clipboard aliases are saved on this machine, so there is "
-            "nothing for Guard to hold the compositor to.")
+            "nothing for OmaGuard to hold the compositor to.")
     else:
         counts = {
             k: sum(1 for b in binds
@@ -358,7 +369,7 @@ def build_checks(facts: dict, runtime: dict) -> list[dict]:
     if isinstance(errors, list):
         # Hyprland reports a clean config as [""], not []. Taking the list
         # length at face value marks a healthy machine BROKEN with an empty
-        # reason — exactly the false alarm Guard exists to avoid.
+        # reason — exactly the false alarm OmaGuard exists to avoid.
         real = [str(e).strip() for e in errors if str(e).strip()]
         add("Hyprland config errors", "ok" if not real else "broken",
             "Hyprland reports no config errors." if not real
@@ -390,15 +401,15 @@ def build_checks(facts: dict, runtime: dict) -> list[dict]:
 # ── Timeline ─────────────────────────────────────────────────────────────
 def load_snapshot(snap_id: str) -> dict:
     if not isinstance(snap_id, str) or not UUID4.match(snap_id):
-        raise GuardError("Invalid capture ID")
+        raise OmaGuardError("Invalid capture ID")
     try:
         snap = json.loads(read_own(secure_state() / f"{snap_id}.json"))
-    except GuardError:
+    except OmaGuardError:
         raise
     except Exception:
-        raise GuardError("Unknown or corrupt capture")
+        raise OmaGuardError("Unknown or corrupt capture")
     if snap.get("id") != snap_id or "files" not in snap or "time" not in snap:
-        raise GuardError("Unknown or corrupt capture")
+        raise OmaGuardError("Unknown or corrupt capture")
     return snap
 
 
@@ -410,7 +421,7 @@ def timeline() -> list[dict]:
             continue
         try:
             snap = load_snapshot(entry.name[:-5])
-        except GuardError:
+        except OmaGuardError:
             continue
         rows.append({
             "id": snap["id"],
@@ -436,14 +447,14 @@ def summarize(changes: list) -> str:
 def current_baseline() -> str | None:
     try:
         ref = json.loads(read_own(secure_state() / "baseline.json"))
-    except (FileNotFoundError, GuardError):
+    except (FileNotFoundError, OmaGuardError):
         return None
     except Exception:
         return None
     baseline = ref.get("id")
     try:
         load_snapshot(baseline)
-    except GuardError:
+    except OmaGuardError:
         return None
     return baseline
 
@@ -564,42 +575,42 @@ FORBIDDEN_KEYS = {"__proto__", "prototype", "constructor"}
 def preview(snap_id: str, file_id: str, path: list[str] | None) -> dict:
     snap = load_snapshot(snap_id)
     if file_id not in FILES:
-        raise GuardError("Unknown file identifier")
+        raise OmaGuardError("Unknown file identifier")
     old, live = snap["files"].get(file_id, {}), read_config(file_id)
     if old.get("status") != "present" or live["status"] != "present":
-        raise GuardError("A preview needs both the captured and the current file")
+        raise OmaGuardError("A preview needs both the captured and the current file")
 
     after = old["text"]
     if file_id == "shell" and path:
         if not (2 <= len(path) <= 12):
-            raise GuardError("Choose a specific field, 2 to 12 levels deep")
+            raise OmaGuardError("Choose a specific field, 2 to 12 levels deep")
         for key in path:
             if not isinstance(key, str) or not key or len(key) > 128 or key in FORBIDDEN_KEYS:
-                raise GuardError("Unsafe field name")
+                raise OmaGuardError("Unsafe field name")
             if key.isdigit():
-                raise GuardError("Array positions are refused — an entry may have moved")
+                raise OmaGuardError("Array positions are refused — an entry may have moved")
         live_doc, want_doc = json.loads(live["text"]), json.loads(old["text"])
 
         def locate(doc):
             node = doc
             for key in path[:-1]:
                 if not isinstance(node, dict) or key not in node:
-                    raise GuardError("That field does not exist in both versions")
+                    raise OmaGuardError("That field does not exist in both versions")
                 node = node[key]
             if not isinstance(node, dict) or path[-1] not in node:
-                raise GuardError("That field does not exist in both versions")
+                raise OmaGuardError("That field does not exist in both versions")
             return node
 
         here, there = locate(live_doc), locate(want_doc)
         leaf = path[-1]
         if isinstance(there[leaf], (dict, list)) or isinstance(here[leaf], (dict, list)):
-            raise GuardError("Pick a single value — Guard will not swap whole sections")
+            raise OmaGuardError("Pick a single value — OmaGuard will not swap whole sections")
         here[leaf] = there[leaf]
         after = json.dumps(live_doc, indent=2) + "\n"
     elif file_id == "shell":
-        raise GuardError("shell.json needs a specific field — whole-file restore is refused")
+        raise OmaGuardError("shell.json needs a specific field — whole-file restore is refused")
     elif path:
-        raise GuardError("A field path only applies to shell.json")
+        raise OmaGuardError("A field path only applies to shell.json")
 
     return {
         "applied": False,
@@ -624,14 +635,14 @@ def accept_baseline(snap_id: str) -> dict:
     load_snapshot(snap_id)
     write_own("baseline.json", {"id": snap_id, "acceptedAt": iso(time.time())})
     return {"baseline": snap_id,
-            "meaning": "Your chosen reference. Guard measures drift from here; "
+            "meaning": "Your chosen reference. OmaGuard measures drift from here; "
                        "it does not certify that this state is healthy."}
 
 
 def forget(snap_id: str) -> dict:
     load_snapshot(snap_id)
     if current_baseline() == snap_id:
-        raise GuardError("That capture is the accepted reference. Accept another first.")
+        raise OmaGuardError("That capture is the accepted reference. Accept another first.")
     (secure_state() / f"{snap_id}.json").unlink()
     return {"forgotten": snap_id}
 
@@ -640,7 +651,7 @@ def forget(snap_id: str) -> dict:
 # A profile is a *wanted* state of the bar: which widgets are on it, in which
 # section, in what order. Switching applies that through the shell's own IPC
 # verbs — putBarWidget / moveBarWidget / setPluginEnabled — one widget at a
-# time, inside the process that owns shell.json. Guard never rewrites
+# time, inside the process that owns shell.json. OmaGuard never rewrites
 # shell.json itself: a dozen agent sessions may be editing the bar at once and
 # a whole-file write reverts every one of them.
 #
@@ -655,7 +666,7 @@ SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 def load_profiles() -> dict:
     try:
         data = json.loads(read_own(secure_state() / PROFILES_FILE))
-    except (FileNotFoundError, GuardError, ValueError):
+    except (FileNotFoundError, OmaGuardError, ValueError):
         return {"schema": 1, "profiles": []}
     if not isinstance(data, dict) or not isinstance(data.get("profiles"), list):
         return {"schema": 1, "profiles": []}
@@ -670,12 +681,12 @@ def find_profile(data: dict, pid: str) -> dict:
     for p in data["profiles"]:
         if p.get("id") == pid:
             return p
-    raise GuardError("No profile with that ID")
+    raise OmaGuardError("No profile with that ID")
 
 
 def shell_ipc(args: list[str]) -> str:
     """One omarchy-shell call. Arguments are a fixed argv list — there is no
-    shell string anywhere in Guard, so a plugin id can never be interpolated
+    shell string anywhere in OmaGuard, so a plugin id can never be interpolated
     into a command."""
     try:
         proc = subprocess.run(
@@ -684,21 +695,21 @@ def shell_ipc(args: list[str]) -> str:
             timeout=RUNTIME_TIMEOUT * 3, text=True,
         )
     except FileNotFoundError:
-        raise GuardError("omarchy-shell is not on PATH — Guard cannot reach the bar")
+        raise OmaGuardError("omarchy-shell is not on PATH — OmaGuard cannot reach the bar")
     except subprocess.TimeoutExpired:
-        raise GuardError("The shell did not answer in time. Nothing was changed.")
+        raise OmaGuardError("The shell did not answer in time. Nothing was changed.")
     if proc.returncode != 0:
-        raise GuardError((proc.stderr or proc.stdout).strip()[:200] or "The shell refused the call")
+        raise OmaGuardError((proc.stderr or proc.stdout).strip()[:200] or "The shell refused the call")
     return proc.stdout.strip()
 
 
 def installed_plugins() -> dict:
     """Every plugin the shell has actually discovered, by id. `enabled` here
     means "in the bar" for a bar-widget, which is not the same as a service
-    being loaded — Guard only ever uses it for bar widgets."""
+    being loaded — OmaGuard only ever uses it for bar widgets."""
     try:
         rows = json.loads(shell_ipc(["shell", "listPlugins"]))
-    except (ValueError, GuardError):
+    except (ValueError, OmaGuardError):
         return {}
     return {r["id"]: r for r in rows if isinstance(r, dict) and isinstance(r.get("id"), str)}
 
@@ -709,13 +720,13 @@ def live_layout() -> dict:
     restored the bar."""
     capture = read_config("shell")
     if capture["status"] != "present":
-        raise GuardError("shell.json could not be read, so the bar cannot be captured")
+        raise OmaGuardError("shell.json could not be read, so the bar cannot be captured")
     try:
         doc = json.loads(capture["text"])
         bar = doc["bar"]
         layout = bar.get("layout") or {}
     except Exception:
-        raise GuardError("shell.json is not valid JSON, so the bar cannot be captured")
+        raise OmaGuardError("shell.json is not valid JSON, so the bar cannot be captured")
     out = {"barId": bar.get("id"), "sections": {}}
     for section in SECTIONS:
         ids = []
@@ -731,7 +742,7 @@ def live_layout() -> dict:
 def duplicate_ids(layout: dict) -> list[str]:
     """Widgets that appear more than once. The shell's verbs address a widget
     by id alone, so two copies of one id cannot be told apart, moved
-    separately, or removed one at a time. Guard refuses such a bar rather than
+    separately, or removed one at a time. OmaGuard refuses such a bar rather than
     report a switch it cannot actually perform."""
     seen, dup = set(), set()
     for sec in SECTIONS:
@@ -750,7 +761,7 @@ def profile_rows(data: dict, live: dict | None = None) -> list[dict]:
     if live is None:
         try:
             live = live_layout()
-        except GuardError:
+        except OmaGuardError:
             live = None
     signature = layout_signature(live) if live else None
     have = installed_plugins()
@@ -778,7 +789,7 @@ def profiles_status() -> dict:
     try:
         live = live_layout()
         error = ""
-    except GuardError as exc:
+    except OmaGuardError as exc:
         live, error = None, str(exc)
     return {
         "profiles": profile_rows(data, live),
@@ -791,17 +802,17 @@ def profiles_status() -> dict:
 def profile_save(name: str, pid: str = "") -> dict:
     name = (name or "").strip()
     if not name:
-        raise GuardError("A profile needs a name")
+        raise OmaGuardError("A profile needs a name")
     if len(name) > 60:
-        raise GuardError("That name is too long (60 characters maximum)")
+        raise OmaGuardError("That name is too long (60 characters maximum)")
     data = load_profiles()
     if any(p["name"].lower() == name.lower() and p["id"] != pid for p in data["profiles"]):
-        raise GuardError(f"You already have a profile called {name!r}")
+        raise OmaGuardError(f"You already have a profile called {name!r}")
     layout, now = live_layout(), iso(time.time())
     twins = duplicate_ids(layout)
     if twins:
-        raise GuardError("The bar has more than one copy of " + ", ".join(twins)
-                         + ". Guard switches widgets by id and cannot tell copies apart, "
+        raise OmaGuardError("The bar has more than one copy of " + ", ".join(twins)
+                         + ". OmaGuard switches widgets by id and cannot tell copies apart, "
                          "so it will not save this bar as a profile.")
     if pid:
         # An overwrite keeps the profile's ID, so favourites, references and
@@ -823,9 +834,9 @@ def profile_set(pid: str, *, name: str | None = None, favorite: bool | None = No
     if name is not None:
         name = name.strip()
         if not name:
-            raise GuardError("A profile needs a name")
+            raise OmaGuardError("A profile needs a name")
         if any(p["name"].lower() == name.lower() and p["id"] != pid for p in data["profiles"]):
-            raise GuardError(f"You already have a profile called {name!r}")
+            raise OmaGuardError(f"You already have a profile called {name!r}")
         target["name"] = name
     if favorite is not None:
         target["favorite"] = favorite
@@ -850,7 +861,7 @@ def profile_plan(pid: str) -> dict:
     want, live = target["layout"], live_layout()
     have = installed_plugins()
     if not have:
-        raise GuardError("The shell did not list any plugins, so a switch cannot be planned")
+        raise OmaGuardError("The shell did not list any plugins, so a switch cannot be planned")
 
     wanted = [(s, i, w) for s in SECTIONS
               for i, w in enumerate(want["sections"].get(s, []))]
@@ -895,7 +906,7 @@ def profile_plan(pid: str) -> dict:
     moves = [x for x in steps if x["verb"] == "move"]
 
     # Changing which bar plugin is running is a different, riskier operation
-    # than arranging widgets inside one. Guard refuses it rather than doing it
+    # than arranging widgets inside one. OmaGuard refuses it rather than doing it
     # halfway.
     bar_change = want.get("barId") != live.get("barId")
     # One message per blocker, keyed by the check that raised it. A single
@@ -903,13 +914,13 @@ def profile_plan(pid: str) -> dict:
     # really refused because it was saved under a different bar.
     blockers = {
         "duplicatesLive": ("The bar has more than one copy of " + ", ".join(twins_live)
-                           + "; Guard cannot tell copies apart, so it will not switch.")
+                           + "; OmaGuard cannot tell copies apart, so it will not switch.")
                           if twins_live else "",
         "duplicatesProfile": ("This profile lists " + ", ".join(twins_want) + " more than once; "
                               "the shell's controls cannot place two copies of one widget.")
                              if twins_want else "",
         "barChange": (f"This profile was saved under a different bar "
-                      f"({want.get('barId')}); Guard will not switch the bar itself.")
+                      f"({want.get('barId')}); OmaGuard will not switch the bar itself.")
                      if bar_change else "",
         "missing": ("This profile needs plugins that are not installed here: "
                     + ", ".join(missing)) if missing else "",
@@ -941,9 +952,9 @@ def profile_apply(pid: str, allow_partial: bool = False) -> dict:
     b = plan["blockers"]
     for hard in ("duplicatesLive", "duplicatesProfile", "barChange"):
         if b[hard]:
-            raise GuardError(b[hard])
+            raise OmaGuardError(b[hard])
     if b["missing"] and not allow_partial:
-        raise GuardError(b["missing"] + ". Switch anyway to apply the rest.")
+        raise OmaGuardError(b["missing"] + ". Switch anyway to apply the rest.")
     if plan["nothingToDo"]:
         # Same shape as a real switch. A reply that omits "exact" reads as
         # "not exact" to anything checking it strictly, which turned every
@@ -962,7 +973,7 @@ def profile_apply(pid: str, allow_partial: bool = False) -> dict:
             return
         try:
             answer = shell_ipc(args)
-        except GuardError as exc:
+        except OmaGuardError as exc:
             answer = str(exc)
         ok = answer == "ok" or answer == ""
         steps.append({"action": what, "id": widget, "result": answer or "ok", "ok": ok})
@@ -1005,11 +1016,11 @@ def profile_apply(pid: str, allow_partial: bool = False) -> dict:
     }
 
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="guard.py", description=__doc__)
+    parser = argparse.ArgumentParser(prog="omaguard.py", description=__doc__)
     parser.add_argument("command",
                         choices=["scan", "status", "snapshot", "baseline", "preview", "forget",
                                  "profiles", "profile-save", "profile-rename", "profile-favorite",
@@ -1060,12 +1071,12 @@ def main(argv: list[str]) -> int:
                 try:
                     path = json.loads(args.path)
                 except ValueError:
-                    raise GuardError('--path must be a JSON array, e.g. '
+                    raise OmaGuardError('--path must be a JSON array, e.g. '
                                      '\'["plugins","omarchy.clock","seconds"]\'')
                 if not isinstance(path, list):
-                    raise GuardError("--path must be a JSON array of key names")
+                    raise OmaGuardError("--path must be a JSON array of key names")
             result = preview(args.id, args.file, path)
-    except GuardError as exc:
+    except OmaGuardError as exc:
         json.dump({"error": str(exc)}, sys.stdout)
         sys.stdout.write("\n")
         return 1
