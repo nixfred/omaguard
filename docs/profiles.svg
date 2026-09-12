@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" width="1200" height="360" role="img" aria-labelledby="t d">
+  <title id="t">Guard profiles — one click between bar layouts</title>
+  <desc id="d">Three starred profile chips; switching moves widgets between bar sections through the shell's own IPC, one widget at a time.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b0f17"/>
+      <stop offset="1" stop-color="#141b27"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0L10 5L0 10z" fill="#e3b75f"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="360" fill="url(#bg)"/>
+  <path d="M28 20H1172L1180 28V332L1172 340H28L20 332V28Z" fill="none" stroke="#7dd3a8" stroke-opacity="0.25"/>
+
+  <g font-family="JetBrains Mono, monospace">
+    <text x="60" y="70" font-size="12" fill="#6b7386" letter-spacing="2">SWITCH TO</text>
+    <!-- chips -->
+    <g font-size="15">
+      <path d="M166 48H274L280 54V78L274 84H166L160 78V54Z" fill="#7dd3a8" fill-opacity="0.16" stroke="#7dd3a8"/>
+      <text x="176" y="72" fill="#7dd3a8">● Desk</text>
+      <path d="M298 48H406L412 54V78L406 84H298L292 78V54Z" fill="none" stroke="#ffffff" stroke-opacity="0.22"/>
+      <text x="312" y="72" fill="#e8ecf3">Focus</text>
+      <path d="M430 48H558L564 54V78L558 84H430L424 78V54Z" fill="none" stroke="#ffffff" stroke-opacity="0.22"/>
+      <text x="442" y="72" fill="#e8ecf3">Present</text>
+      <path d="M582 48H690L696 54V78L690 84H582L576 78V54Z" fill="none" stroke="#e06c6c" stroke-opacity="0.6"/>
+      <text x="594" y="72" fill="#e06c6c">Media ⚠</text>
+    </g>
+    <text x="720" y="72" font-size="12" fill="#6b7386">⚠ = needs a plugin that is not installed here</text>
+
+    <!-- before bar -->
+    <text x="60" y="140" font-size="12" fill="#6b7386" letter-spacing="2">DESK</text>
+    <path d="M60 152H1140L1146 158V186L1140 192H60L54 186V158Z" fill="#0e131c" stroke="#ffffff" stroke-opacity="0.08"/>
+    <g font-size="12">
+      <rect x="72" y="160" width="92" height="24" rx="4" fill="#5b8def" fill-opacity="0.25"/><text x="80" y="177" fill="#c9d4ee">workspaces</text>
+      <rect x="172" y="160" width="62" height="24" rx="4" fill="#7dd3a8" fill-opacity="0.22"/><text x="182" y="177" fill="#7dd3a8">guard</text>
+      <rect x="242" y="160" width="84" height="24" rx="4" fill="#e3b75f" fill-opacity="0.25"/><text x="250" y="177" fill="#f0d49a">beatdeck</text>
+      <rect x="334" y="160" width="84" height="24" rx="4" fill="#ffffff" fill-opacity="0.07"/><text x="344" y="177" fill="#8b94a7">burnbar</text>
+      <rect x="560" y="160" width="68" height="24" rx="4" fill="#ffffff" fill-opacity="0.07"/><text x="572" y="177" fill="#8b94a7">clock</text>
+      <rect x="990" y="160" width="68" height="24" rx="4" fill="#ffffff" fill-opacity="0.07"/><text x="1000" y="177" fill="#8b94a7">power</text>
+      <rect x="1066" y="160" width="64" height="24" rx="4" fill="#ffffff" fill-opacity="0.07"/><text x="1076" y="177" fill="#8b94a7">tray</text>
+    </g>
+
+    <!-- after bar -->
+    <text x="60" y="262" font-size="12" fill="#6b7386" letter-spacing="2">FOCUS</text>
+    <path d="M60 274H1140L1146 280V308L1140 314H60L54 308V280Z" fill="#0e131c" stroke="#7dd3a8" stroke-opacity="0.25"/>
+    <g font-size="12">
+      <rect x="72" y="282" width="92" height="24" rx="4" fill="#5b8def" fill-opacity="0.25"/><text x="80" y="299" fill="#c9d4ee">workspaces</text>
+      <rect x="172" y="282" width="62" height="24" rx="4" fill="#7dd3a8" fill-opacity="0.22"/><text x="182" y="299" fill="#7dd3a8">guard</text>
+      <rect x="560" y="282" width="68" height="24" rx="4" fill="#ffffff" fill-opacity="0.07"/><text x="572" y="299" fill="#8b94a7">clock</text>
+      <rect x="900" y="282" width="84" height="24" rx="4" fill="#e3b75f" fill-opacity="0.25"/><text x="908" y="299" fill="#f0d49a">beatdeck</text>
+      <rect x="990" y="282" width="68" height="24" rx="4" fill="#ffffff" fill-opacity="0.07"/><text x="1000" y="299" fill="#8b94a7">power</text>
+      <rect x="1066" y="282" width="64" height="24" rx="4" fill="#ffffff" fill-opacity="0.07"/><text x="1076" y="299" fill="#8b94a7">tray</text>
+    </g>
+
+    <!-- steps -->
+    <path d="M284 196C300 236 880 236 940 276" fill="none" stroke="#e3b75f" stroke-width="1.8" stroke-dasharray="5 5" marker-end="url(#arrow)"/>
+    <text x="640" y="210" font-size="12" fill="#e3b75f">moveBarWidget beatdeck → right:0</text>
+    <path d="M376 196v48" stroke="#e06c6c" stroke-width="1.8" stroke-dasharray="4 4"/>
+    <text x="366" y="252" font-size="12" fill="#e06c6c" text-anchor="end">setPluginEnabled burnbar false</text>
+  </g>
+</svg>

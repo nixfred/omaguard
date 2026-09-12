@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "id": "nixfred.guard",
+  "name": "Guard",
+  "version": "1.1.0",
+  "author": "nixfred",
+  "license": "MIT",
+  "description": "A shield in the bar that remembers what your desktop used to look like. Guard captures your Hyprland and Omarchy config on a timeline, tells you when something drifted from the state you accepted, and shows a precise before/after for putting one value back — as a preview, never an automatic write.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "GuardPanel.qml"
+  },
+  "barWidget": {
+    "displayName": "Guard",
+    "description": "Config drift at a glance: green while every preference you protect still holds, amber when something moved since your reference, red when a protected preference is gone or Hyprland is erroring.",
+    "category": "System",
+    "aliases": [
+      "guard",
+      "config",
+      "drift",
+      "backup",
+      "history",
+      "timeline",
+      "restore",
+      "snapshot",
+      "hyprland",
+      "shell.json"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "left",
+    "defaults": {
+      "pollSeconds": 60,
+      "helperTimeoutMs": 20000
+    },
+    "schema": [
+      {
+        "key": "pollSeconds",
+        "type": "integer",
+        "label": "Re-read interval (seconds)",
+        "description": "How often Guard re-reads its own state so the shield stays current. This only re-reads what is already stored — it does not take a new capture. Captures happen when you press Capture now.",
+        "min": 15,
+        "max": 3600,
+        "defaultValue": 60
+      },
+      {
+        "key": "helperTimeoutMs",
+        "type": "integer",
+        "label": "Helper timeout (ms)",
+        "description": "How long Guard waits for guard.py before giving up and saying so. A timeout is always reported; it never renders as a healthy shield.",
+        "min": 2000,
+        "max": 120000,
+        "defaultValue": 20000
+      }
+    ]
+  },
+  "repository": "https://github.com/nixfred/guard.omarchy",
+  "homepage": "https://omarchy.nixfred.com"
+}
