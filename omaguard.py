@@ -659,6 +659,7 @@ def forget(snap_id: str) -> dict:
 # does not have is reported as blocked, with the names, and nothing is applied
 # unless you accept a reduced switch explicitly.
 PROFILES_FILE = "profiles.json"
+RENAMED_WIDGET = ("nixfred.guard", "nixfred.omaguard")
 SECTIONS = ("left", "center", "right")
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
@@ -670,6 +671,21 @@ def load_profiles() -> dict:
         return {"schema": 1, "profiles": []}
     if not isinstance(data, dict) or not isinstance(data.get("profiles"), list):
         return {"schema": 1, "profiles": []}
+    # Renamed from Guard in 1.2.0: a bar saved before the rename holds this
+    # widget as nixfred.guard, which no longer exists, so every such profile
+    # would read "not installed" and refuse to switch. Rewrite the id in place,
+    # once, and never where the profile already carries the new id.
+    changed = False
+    for prof in data["profiles"]:
+        sections = (prof.get("layout") or {}).get("sections") or {}
+        ids = [w for sec in SECTIONS for w in sections.get(sec, [])]
+        if RENAMED_WIDGET[0] in ids and RENAMED_WIDGET[1] not in ids:
+            for sec in SECTIONS:
+                sections[sec] = [RENAMED_WIDGET[1] if w == RENAMED_WIDGET[0] else w
+                                 for w in sections.get(sec, [])]
+            changed = True
+    if changed:
+        save_profiles(data)
     return data
 
 

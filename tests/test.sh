@@ -271,6 +271,17 @@ cp "$OMAGUARD_HOME/.config/omarchy/shell.json" "$MIG/.config/omarchy/shell.json"
 env -u OMAGUARD_STATE OMAGUARD_HOME="$MIG" python3 "$OMAGUARD" profiles >/dev/null
 check "legacy state moved"            "$([ -d "$MIG/.local/state/omaguard" ] && [ ! -e "$MIG/.local/state/guard" ] && echo yes)" "yes"
 check "profiles survive the rename"   "$(env -u OMAGUARD_STATE OMAGUARD_HOME="$MIG" python3 "$OMAGUARD" profiles | jq_ '[p["name"] for p in d["profiles"]]')" "['Kept']"
+python3 - "$MIG/.local/state/omaguard/profiles.json" <<'PY2'
+import json,sys; p=sys.argv[1]; d=json.load(open(p))
+d["profiles"][0]["layout"]["sections"]["left"]=["omarchy.clock","nixfred.guard"]
+d["profiles"].append({"id":"22222222-2222-4222-8222-222222222222","name":"Both","favorite":False,"created":"x","updated":"x",
+  "layout":{"barId":"x","sections":{"left":["nixfred.guard","nixfred.omaguard"],"center":[],"right":[]}}})
+json.dump(d,open(p,"w"))
+PY2
+chmod 600 "$MIG/.local/state/omaguard/profiles.json"
+env -u OMAGUARD_STATE OMAGUARD_HOME="$MIG" python3 "$OMAGUARD" profiles >/dev/null
+check "old widget id rewritten"       "$(python3 -c "import json;print(json.load(open('$MIG/.local/state/omaguard/profiles.json'))['profiles'][0]['layout']['sections']['left'])")" "['omarchy.clock', 'nixfred.omaguard']"
+check "never duplicates the new id"   "$(python3 -c "import json;print(json.load(open('$MIG/.local/state/omaguard/profiles.json'))['profiles'][1]['layout']['sections']['left'])")" "['nixfred.guard', 'nixfred.omaguard']"
 
 echo; echo "── real desktop config was never touched"
 check "real OmaGuard state untouched"   "$(realstate)" "$REAL_BEFORE"
