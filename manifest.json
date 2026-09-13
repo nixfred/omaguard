@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "nixfred.omaguard",
   "name": "OmaGuard",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "author": "nixfred",
   "license": "MIT",
   "description": "A shield in the bar and your saved bar layouts in one click. Load a layout, and OmaGuard tells you when the bar has unsaved changes to it (Save, Undo, Save as new). The shield only counts problems the live desktop confirms, each with how to fix it.",
@@ -33,9 +33,17 @@
     "defaultSection": "left",
     "defaults": {
       "pollSeconds": 60,
-      "helperTimeoutMs": 20000
+      "helperTimeoutMs": 20000,
+      "autoAddNewWidgets": true
     },
     "schema": [
+      {
+        "key": "autoAddNewWidgets",
+        "type": "boolean",
+        "label": "Auto-add new widgets",
+        "description": "When you add a widget to the bar, add it to the loaded layout in the same place. Moves and removals are never saved automatically \u2014 they show as unsaved changes.",
+        "defaultValue": true
+      },
       {
         "key": "pollSeconds",
         "type": "integer",

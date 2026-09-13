@@ -428,6 +428,38 @@ json.dump({"action":"layout-load","label":"Loading a layout","at":"x","epoch":ti
 PY2
 check "an abandoned action is interrupted, not running" "$(L layouts | jq_ '(d["lastAction"]["pending"], d["lastAction"]["ok"], d["lastAction"].get("interrupted"))')" "(False, False, True)"
 
+echo; echo "── new widgets join the loaded layout; favourites and Update"
+export OMAGUARD_ADOPT_QUIET_SECONDS=0
+A() { OMAGUARD_STATE="$ROOT/astate" python3 "$OMAGUARD" "$@"; }
+secs() { A layouts | jq_ '[p for p in json.load(open("'"$ROOT"'/astate/profiles.json"))["profiles"] if p["name"]=="'"$1"'"][0]["layout"]["sections"]["'"$2"'"]'; }
+setbar '{"left":[{"id":"omarchy.clock"},{"id":"omarchy.network"}],"center":[],"right":[]}'
+A layout-save-as --name=Fav >/dev/null
+FAV=$(A layouts | jq_ 'd["loaded"]')
+setbar '{"left":[{"id":"omarchy.clock"},{"id":"omarchy.battery","zone":"outer"},{"id":"omarchy.network"}],"center":[],"right":[]}'
+check "no adoption without --adopt"    "$(A layouts | jq_ 'd["unsaved"]')" "True"
+OUT=$(A layouts --adopt)
+check "a new widget joins the layout"  "$(echo "$OUT" | jq_ '(d["unsaved"], d["lastAction"]["action"], "omarchy.battery" in d["lastAction"]["note"])')" "(False, 'layout-adopt', True)"
+check "…between its real neighbours"   "$(secs Fav left)" "['omarchy.clock', 'omarchy.battery', 'omarchy.network']"
+check "…with its pin"                  "$(python3 -c "import json;print([p for p in json.load(open('$ROOT/astate/profiles.json'))['profiles'] if p['name']=='Fav'][0]['layout']['zones'].get('omarchy.battery'))")" "outer"
+setbar '{"left":[{"id":"omarchy.network"},{"id":"omarchy.clock"},{"id":"omarchy.battery","zone":"outer"}],"center":[],"right":[]}'
+check "a move is never adopted"        "$(A layouts --adopt | jq_ 'd["unsaved"]')" "True"
+setbar '{"left":[{"id":"omarchy.clock"},{"id":"omarchy.battery","zone":"outer"}],"center":[],"right":[]}'
+check "a removal is never adopted"     "$(A layouts --adopt | jq_ '(d["unsaved"], any("Taken off" in c for c in d["unsavedChanges"]))')" "(True, True)"
+python3 - "$ROOT/astate/last-action.json" <<'PY2'
+import json,sys,time; json.dump({"action":"layout-load","epoch":time.time(),"pending":True},open(sys.argv[1],"w"))
+PY2
+setbar '{"left":[{"id":"omarchy.clock"},{"id":"omarchy.battery","zone":"outer"},{"id":"omarchy.network"},{"id":"omarchy.clock2"}],"center":[],"right":[]}'
+check "nothing adopted mid-load"       "$(A layouts --adopt | jq_ '(d["lastAction"]["action"], d["lastAction"]["pending"])')" "('layout-load', True)"
+rm -f "$ROOT/astate/last-action.json"
+setbar '{"left":[{"id":"omarchy.network"}],"center":[],"right":[]}'
+A layout-save-as --name=Other >/dev/null
+setbar '{"left":[{"id":"omarchy.battery"},{"id":"omarchy.clock"}],"center":[{"id":"omarchy.network"}],"right":[]}'
+check "Update overwrites that layout"  "$(A layout-update --id="$FAV" | jq_ '(d["loadedName"], d["unsaved"], d["result"]["ok"])')" "('Fav', False, True)"
+check "…with the bar as it is"         "$(secs Fav center)" "['omarchy.network']"
+check "Other was left alone"           "$(secs Other left)" "['omarchy.network']"
+check "starring sorts it first"        "$(A layout-favorite --id="$(A layouts | jq_ '[p["id"] for p in d["layouts"] if p["name"]=="Other"][0]')" --value=true | jq_ '[(p["name"], p["favorite"]) for p in d["layouts"]][0]')" "('Other', True)"
+unset OMAGUARD_ADOPT_QUIET_SECONDS
+
 echo; echo "── real desktop config was never touched"
 check "real OmaGuard state untouched"   "$(realstate)" "$REAL_BEFORE"
 check "real shell.json untouched"    "$(grep -c vendor.ghost "$HOME/.config/omarchy/shell.json")" "0"

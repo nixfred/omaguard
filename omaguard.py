@@ -1125,7 +1125,9 @@ def summarize_layout(want: dict, live: dict) -> list[str]:
     return out
 
 
-def layouts_status(result: dict | None = None) -> dict:
+def layouts_status(result: dict | None = None, adopt: bool = False) -> dict:
+    if adopt:
+        adopt_new_widgets()
     data = load_profiles()
     try:
         live, error = live_layout(), ""
@@ -1187,7 +1189,13 @@ LAYOUT_ACTIONS = {
     "layout-load": "Loading a layout", "layout-save": "Saving",
     "layout-save-as": "Saving as new", "layout-undo": "Undoing",
     "layout-rename": "Renaming", "layout-delete": "Deleting",
+    "layout-update": "Updating", "layout-favorite": "Starring",
+    "layout-adopt": "Adding new widgets",
 }
+# A load in progress moves widgets onto the bar that belong to the *new*
+# layout; adopting them into the old one would corrupt it. Adoption waits this
+# long after any layout action.
+ADOPT_QUIET_SECONDS = float(os.environ.get("OMAGUARD_ADOPT_QUIET_SECONDS") or 10)
 
 
 def record_action(action: str, payload: dict) -> None:
@@ -1223,6 +1231,10 @@ def run_layout_action(command: str, args) -> dict:
             out = layout_undo()
         elif command == "layout-rename":
             out = layout_rename(args.id, args.name)
+        elif command == "layout-update":
+            out = layout_update(args.id)
+        elif command == "layout-favorite":
+            out = layout_favorite(args.id, args.value == "true")
         else:
             out = layout_delete(args.id)
     except Exception as exc:
@@ -1234,6 +1246,64 @@ def run_layout_action(command: str, args) -> dict:
                             "steps": [st for st in r.get("steps", []) if st.get("ok") is False or st.get("result") == "not attempted"]})
     out["lastAction"] = last_action()
     return out
+
+
+def adopt_new_widgets() -> list[str]:
+    """Widgets you added to the bar join the loaded layout, where you put them.
+
+    Only additions. A move or a removal stays an unsaved change for you to
+    Save or Undo, so an accidental drag is never silently kept. Nothing is
+    adopted while a layout action is running or just after one."""
+    recent = last_action()
+    if recent and (recent.get("pending")
+                   or time.time() - float(recent.get("epoch") or 0) < ADOPT_QUIET_SECONDS):
+        return []
+    data = load_profiles()
+    prof = next((p for p in data["profiles"] if p["id"] == data.get("loaded")), None)
+    if not prof:
+        return []
+    try:
+        live = live_layout()
+    except OmaGuardError:
+        return []
+    if duplicate_ids(live):
+        return []
+    have = installed_plugins()
+    want = prof["layout"]
+    known = {w for sec in SECTIONS for w in want["sections"].get(sec, [])}
+    added = []
+    for sec in SECTIONS:
+        target = want["sections"].setdefault(sec, [])
+        row = live["sections"].get(sec, [])
+        for i, w in enumerate(row):
+            if w in known or (have and w not in have):
+                continue
+            # After the nearest widget to its left that the layout already has.
+            before = [x for x in row[:i] if x in target]
+            target.insert(target.index(before[-1]) + 1 if before else 0, w)
+            known.add(w)
+            added.append(w)
+            zone = (live.get("zones") or {}).get(w)
+            if zone and has_zones(want):
+                want["zones"][w] = zone
+    if added:
+        prof["updated"] = iso(time.time())
+        save_profiles(data)
+        record_action("layout-adopt", {"pending": False, "ok": True,
+                                       "note": f"Added {name_list(added)} to {prof['name']}."})
+    return added
+
+
+def layout_update(pid: str) -> dict:
+    name = find_profile(load_profiles(), pid)["name"]
+    profile_save(name, pid)
+    return layouts_status({"ok": True, "note": f"Updated {name} to your bar as it is now. It is your loaded layout."})
+
+
+def layout_favorite(pid: str, on: bool) -> dict:
+    name = find_profile(load_profiles(), pid)["name"]
+    profile_set(pid, favorite=on)
+    return layouts_status({"ok": True, "note": f"{name} is {'a favourite' if on else 'no longer a favourite'}."})
 
 
 def layout_load(pid: str) -> dict:
@@ -1365,7 +1435,7 @@ def accept_current() -> dict:
     return status()
 
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 
 def main(argv: list[str]) -> int:
@@ -1375,12 +1445,15 @@ def main(argv: list[str]) -> int:
                                  "profiles", "profile-save", "profile-rename", "profile-favorite",
                                  "profile-forget", "profile-plan", "profile-apply", "accept-current",
                                  "health", "layouts", "layout-load", "layout-save", "layout-save-as",
-                                 "layout-undo", "layout-rename", "layout-delete"])
+                                 "layout-undo", "layout-rename", "layout-delete",
+                                 "layout-update", "layout-favorite"])
     parser.add_argument("--id", default="")
     parser.add_argument("--file", default="")
     parser.add_argument("--name", default="")
     parser.add_argument("--value", choices=["true", "false"], default="true")
     parser.add_argument("--allow-partial", action="store_true")
+    parser.add_argument("--adopt", action="store_true",
+                        help="layouts: add widgets that are new on the bar to the loaded layout")
     # A JSON array, not a dotted string: every Omarchy plugin key is itself
     # dotted ("plugins" → "omarchy.clock" → "seconds"), so a "." separator
     # can never address the one thing this tool exists to restore.
@@ -1402,7 +1475,7 @@ def main(argv: list[str]) -> int:
         elif args.command == "health":
             result = health()
         elif args.command == "layouts":
-            result = layouts_status()
+            result = layouts_status(adopt=args.adopt)
         elif args.command in LAYOUT_ACTIONS:
             result = run_layout_action(args.command, args)
         elif args.command == "accept-current":

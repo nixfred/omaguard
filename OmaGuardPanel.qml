@@ -25,7 +25,9 @@ Panel {
     implicitWidth: barButton.implicitWidth
     implicitHeight: barButton.implicitHeight
 
-    readonly property string version: "1.4.0"
+    readonly property string version: "1.5.0"
+    // New widgets on the bar join the loaded layout (additions only).
+    readonly property bool autoAdd: setting("autoAddNewWidgets", true) !== false
     property var layoutState: ({layouts: [], problems: [], checks: [], unsavedChanges: []})
     property var historyState: ({timeline: []})
     property bool answered: false
@@ -111,7 +113,7 @@ Panel {
         worker.running = true
         watchdog.restart()
     }
-    function refresh() { call("layouts", ["layouts"]) }
+    function refresh() { call("layouts", autoAdd ? ["layouts", "--adopt"] : ["layouts"]) }
     // Detached, never through `worker`: the first widget a layout moves makes
     // the bar rebuild this whole section, destroying this instance and any
     // process it owns. The helper records its outcome in its state file, and
@@ -128,6 +130,8 @@ Panel {
     function undoChanges() { act(["layout-undo"], "Putting the bar back…") }
     function saveAs(name) { saveAsOpen = false; act(["layout-save-as", "--name=" + name], "Saving…") }
     function renameLayout(id, name) { renameId = ""; act(["layout-rename", "--id=" + id, "--name=" + name], "Renaming…") }
+    function updateLayout(p) { act(["layout-update", "--id=" + p.id], "Updating " + p.name + "…") }
+    function favoriteLayout(p) { act(["layout-favorite", "--id=" + p.id, "--value=" + (p.favorite ? "false" : "true")], p.favorite ? "Unstarring…" : "Starring…") }
     function deleteLayout(p) { act(["layout-delete", "--id=" + p.id], "Deleting " + p.name + "…") }
     function loadHistory() { call("history", ["status"]) }
     function takeSnapshot() { call("history", ["scan"]) }
@@ -256,7 +260,7 @@ Panel {
         owner: root
         open: root.opened
         focusTarget: root.saveAsOpen ? saveAsField : null
-        contentWidth: fittedContentWidth(600)
+        contentWidth: fittedContentWidth(680)
         // LAW 17: the panel fits its content; only lists scroll, in place.
         // fittedContentHeight adds the card's padding and border; the capped
         // variant expects them already included, and the footer spilled out.
@@ -366,9 +370,22 @@ Panel {
                             color: modelData.loaded ? Color.accent : root.muted
                             font.pixelSize: 16
                         }
+                        Text {
+                            id: star
+                            anchors { left: dot.right; leftMargin: 8; verticalCenter: parent.verticalCenter }
+                            text: modelData.favorite ? "★" : "☆"
+                            color: modelData.favorite ? Color.accent : root.muted
+                            font.pixelSize: 18
+                            MouseArea {
+                                anchors.fill: parent
+                                anchors.margins: -6
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.favoriteLayout(modelData)
+                            }
+                        }
                         Column {
                             visible: root.renameId !== modelData.id
-                            anchors { left: dot.right; leftMargin: 10; right: actions.left; rightMargin: 10; verticalCenter: parent.verticalCenter }
+                            anchors { left: star.right; leftMargin: 10; right: actions.left; rightMargin: 10; verticalCenter: parent.verticalCenter }
                             spacing: 1
                             Text { width: parent.width; text: modelData.name; color: root.ink; font.pixelSize: 14; font.bold: true; elide: Text.ElideRight; textFormat: Text.PlainText }
                             Text {
@@ -383,7 +400,7 @@ Panel {
                         TextField {
                             id: renameField
                             visible: root.renameId === modelData.id
-                            anchors { left: dot.right; leftMargin: 10; right: actions.left; rightMargin: 10; verticalCenter: parent.verticalCenter }
+                            anchors { left: star.right; leftMargin: 10; right: actions.left; rightMargin: 10; verticalCenter: parent.verticalCenter }
                             text: modelData.name
                             onVisibleChanged: if (visible) { forceActiveFocus(); selectAll() }
                             onAccepted: if (text.trim().length) root.renameLayout(modelData.id, text.trim())
@@ -397,6 +414,13 @@ Panel {
                                 text: "Load"
                                 enabled: modelData.canSwitch
                                 onClicked: root.loadLayout(modelData)
+                            }
+                            // Take the bar as it is now into this layout, whichever one is
+                            // loaded. Hidden when the layout already matches the bar.
+                            Button {
+                                visible: root.renameId !== modelData.id && !modelData.active
+                                text: "Update"
+                                onClicked: root.updateLayout(modelData)
                             }
                             Button { visible: root.renameId !== modelData.id; text: "Rename"; onClicked: root.renameId = modelData.id }
                             Button { visible: root.renameId !== modelData.id; text: "Delete"; onClicked: root.deleteLayout(modelData) }
@@ -564,7 +588,8 @@ Panel {
 
             Text {
                 width: parent.width
-                text: "OmaGuard " + root.version + " · only loading, saving or undoing a layout changes your bar"
+                text: "OmaGuard " + root.version + " · ★ favourites stay on top · Update saves the bar into that layout"
+                      + (root.autoAdd ? " · widgets you add join the loaded layout" : "")
                 color: root.muted
                 font.pixelSize: 10
                 wrapMode: Text.Wrap
