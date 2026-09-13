@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "nixfred.omaguard",
   "name": "OmaGuard",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "author": "nixfred",
   "license": "MIT",
-  "description": "A shield in the bar that remembers what your desktop used to look like. OmaGuard captures your Hyprland and Omarchy config on a timeline, tells you when something drifted from the state you accepted, and shows a precise before/after for putting one value back \u2014 as a preview, never an automatic write.",
+  "description": "A shield in the bar and your saved bar layouts in one click. Load a layout, and OmaGuard tells you when the bar has unsaved changes to it (Save, Undo, Save as new). The shield only counts problems the live desktop confirms, each with how to fix it.",
   "kinds": [
     "bar-widget"
   ],
@@ -14,7 +14,7 @@
   },
   "barWidget": {
     "displayName": "OmaGuard",
-    "description": "Config drift at a glance: green while every preference you protect still holds, amber when something moved since your reference, red when a protected preference is gone or Hyprland is erroring.",
+    "description": "One-click bar layouts with Save / Undo, and a shield that only warns about problems the running desktop confirms.",
     "category": "System",
     "aliases": [
       "omaguard",

@@ -26,6 +26,27 @@ REAL_BEFORE=$(realstate)
 ROOT=$(mktemp -d -t omaguard-test-XXXXXX)
 trap 'rm -rf "$ROOT"' EXIT
 export OMAGUARD_HOME="$ROOT/home" OMAGUARD_STATE="$ROOT/state"
+# Checks are judged on the live desktop, so the suite hands OmaGuard a recorded
+# runtime instead of letting it read whatever compositor this machine runs.
+python3 - "$ROOT" <<'PY2'
+import json, sys, os
+root = sys.argv[1]
+ok = lambda d: {"status": "available", "data": d}
+na = {"status": "unavailable", "reason": "fixture"}
+binds = [{"modmask": 4, "key": k, "description": "Clipboard"} for k in "CXV"]
+kbd = {"keyboards": [{"name": "kbd", "options": "compose:caps,altwin:swap_alt_win"}]}
+svc = {"LoadState": "loaded", "ActiveState": "active", "UnitFileState": "enabled"}
+fixtures = {
+    "rt_ok":       {"binds": ok(binds), "devices": ok(kbd), "configerrors": ok([""]), "service": ok(svc)},
+    "rt_nov":      {"binds": ok([b for b in binds if b["key"] != "V"]), "devices": ok(kbd), "configerrors": ok([""]), "service": ok(svc)},
+    "rt_unavail":  {"binds": na, "devices": na, "configerrors": na, "service": na},
+    "rt_errors":   {"binds": ok(binds), "devices": ok(kbd), "configerrors": ok(["hyprland.lua:3: unknown option"]), "service": ok(svc)},
+    "rt_noswap":   {"binds": ok(binds), "devices": ok({"keyboards": [{"name": "kbd", "options": "compose:caps"}]}), "configerrors": ok([""]), "service": ok(svc)},
+}
+for name, data in fixtures.items():
+    json.dump(data, open(os.path.join(root, name + ".json"), "w"))
+PY2
+export OMAGUARD_RUNTIME="$ROOT/rt_ok.json"
 mkdir -p "$OMAGUARD_HOME/.config/hypr" "$OMAGUARD_HOME/.config/omarchy"
 
 cat > "$OMAGUARD_HOME/.config/hypr/input.lua" <<'LUA'
@@ -56,7 +77,7 @@ echo; echo "── evidence, not guesses"
 check "swap read from the file"      "$(g status | jq_ 'd["latest"]["facts"]["keyboard"]["swapLiteral"]')" "True"
 check "commented decoy ignored"      "$(g status | jq_ 'd["latest"]["facts"]["keyboard"]["options"]')" "['altwin:swap_alt_win']"
 check "missing file is missing"      "$(g status | jq_ 'd["latest"]["files"]["clipboard"]["status"]')" "missing"
-check "missing file is not a pass"   "$(g status | jq_ '[c["status"] for c in d["latest"]["checks"] if c["name"]=="Clipboard policy"][0]')" "unknown"
+check "missing file is not a pass"   "$(g status | jq_ '[c["status"] for c in d["latest"]["checks"] if c["name"]=="Clipboard shortcuts"][0]')" "n/a"
 
 echo; echo "── drift against an accepted reference"
 BASE=$(g status | jq_ 'd["timeline"][-1]["id"]')
@@ -133,6 +154,12 @@ elif a[1] == "setBarWidget":
     for s in L:
         for e in L[s]:
             if e["id"] == a[2]: e[a[3]] = json.loads(a[4])
+lag = float(os.environ.get("FAKE_LAG_MS") or 0) / 1000
+if lag:
+    # Like the real shell: answer now, write the file a moment later.
+    if os.fork() == 0:
+        import time; time.sleep(lag); json.dump(d, open(cfg, "w")); os._exit(0)
+    print("ok"); sys.exit()
 json.dump(d, open(cfg, "w")); print("ok")
 SH
 chmod +x "$FAKEBIN/omarchy-shell"
@@ -196,7 +223,7 @@ PIN=$(g profiles | jq_ '[p["id"] for p in d["profiles"] if p["name"]=="Pinned"][
 check "pins are recorded on save"     "$(g profiles | jq_ '[p["pinned"] for p in d["profiles"] if p["name"]=="Pinned"][0]')" "1"
 setbar '{"left":[{"id":"omarchy.clock"},{"id":"omarchy.battery"}],"center":[],"right":[]}'
 check "an unpinned bar is not active" "$(g profiles | jq_ '[p["active"] for p in d["profiles"] if p["name"]=="Pinned"][0]')" "False"
-check "row says what switching does"  "$(g profiles | jq_ '[p["changes"] for p in d["profiles"] if p["name"]=="Pinned"][0]')" "re-pin 1 widget"
+check "row says what differs"         "$(g profiles | jq_ '[p["changes"] for p in d["profiles"] if p["name"]=="Pinned"][0]')" "1 widget pinned or unpinned: omarchy.clock"
 OUT=$(g profile-apply --id="$PIN")
 check "switch restores the pin"       "$(python3 -c "import json;print(json.load(open('$OMAGUARD_HOME/.config/omarchy/shell.json'))['bar']['layout']['left'][0].get('zone'))")" "outer"
 check "pin switch is exact"           "$(echo "$OUT" | jq_ 'd["exact"]')" "True"
@@ -327,6 +354,79 @@ chmod 600 "$MIG/.local/state/omaguard/profiles.json"
 env -u OMAGUARD_STATE OMAGUARD_HOME="$MIG" python3 "$OMAGUARD" profiles >/dev/null
 check "old widget id rewritten"       "$(python3 -c "import json;print(json.load(open('$MIG/.local/state/omaguard/profiles.json'))['profiles'][0]['layout']['sections']['left'])")" "['omarchy.clock', 'nixfred.omaguard']"
 check "never duplicates the new id"   "$(python3 -c "import json;print(json.load(open('$MIG/.local/state/omaguard/profiles.json'))['profiles'][1]['layout']['sections']['left'])")" "['nixfred.guard', 'nixfred.omaguard']"
+
+echo; echo "── the shield counts only problems the live desktop confirms"
+H2="$ROOT/h2"; mkdir -p "$H2/.config/hypr" "$H2/.config/omarchy"
+printf 'o.input({ kb_options = "altwin:swap_alt_win" })\n' > "$H2/.config/hypr/input.lua"
+printf 'require("hypr.clipboard")\n' > "$H2/.config/hypr/hyprland.lua"
+cat > "$H2/.config/hypr/clipboard.lua" <<'LUA'
+-- Built in a loop, the way Fred's real clipboard.lua does it. No literal
+-- o.bind("CTRL + V") anywhere, which is what 1.3.0 wrongly called broken.
+for _, mod in ipairs({ "SUPER", "ALT", "CTRL" }) do
+  for _, action in ipairs({ "C", "X", "V" }) do
+    o.bind(mod .. " + " .. action, "Clipboard", clipboard(action))
+  end
+end
+LUA
+echo '{"bar":{"id":"x","layout":{"left":[],"center":[],"right":[]}}}' > "$H2/.config/omarchy/shell.json"
+h() { OMAGUARD_HOME="$H2" OMAGUARD_STATE="$ROOT/h2state" OMAGUARD_RUNTIME="$ROOT/$1.json" python3 "$OMAGUARD" health; }
+check "loop-built binds are no problem" "$(h rt_ok | jq_ '(len(d["problems"]), [c["status"] for c in d["checks"] if c["name"]=="Clipboard shortcuts"][0])')" "(0, 'ok')"
+check "a truly missing Ctrl+V is one"   "$(h rt_nov | jq_ '[c["name"] for c in d["problems"]]')" "['Clipboard shortcuts']"
+check "…named, with how to fix it"      "$(h rt_nov | jq_ '"Ctrl+V" in d["problems"][0]["detail"] and "hyprctl reload" in d["problems"][0]["fix"]')" "True"
+check "can't-ask is never a problem"    "$(h rt_unavail | jq_ '(len(d["problems"]), sorted({c["status"] for c in d["checks"]}))')" "(0, ['n/a', 'unknown'])"
+check "config errors are a problem"     "$(h rt_errors | jq_ '[c["name"] for c in d["problems"]]')" "['Hyprland config']"
+check "a swap not applied is a problem" "$(h rt_noswap | jq_ '[c["name"] for c in d["problems"]]')" "['Alt / Super swap']"
+check "health writes nothing"           "$([ -e "$ROOT/h2state" ] && ls "$ROOT/h2state" | grep -c json || echo 0)" "0"
+
+echo; echo "── layouts are your setups: load, unsaved changes, save, undo, save as"
+L() { OMAGUARD_STATE="$ROOT/lstate" python3 "$OMAGUARD" "$@"; }
+left() { python3 -c "import json;print([e['id'] for e in json.load(open('$OMAGUARD_HOME/.config/omarchy/shell.json'))['bar']['layout']['left']])"; }
+setbar '{"left":[{"id":"omarchy.clock"},{"id":"omarchy.battery"}],"center":[],"right":[{"id":"omarchy.network"}]}'
+L layout-save-as --name=Work >/dev/null
+WORK=$(L layouts | jq_ 'd["loaded"]')
+check "a new layout starts loaded"     "$(L layouts | jq_ '(d["loadedName"], d["unsaved"])')" "('Work', False)"
+setbar '{"left":[{"id":"omarchy.battery"},{"id":"omarchy.clock"}],"center":[],"right":[{"id":"omarchy.network"}]}'
+check "a bar edit is unsaved changes"  "$(L layouts | jq_ '(d["loadedName"], d["unsaved"], d["canUndo"])')" "('Work', True, True)"
+check "…described in words"            "$(L layouts | jq_ 'any("moved" in c for c in d["unsavedChanges"])')" "True"
+check "…and never a problem"           "$(L layouts | jq_ 'len(d["problems"])')" "0"
+check "undo reports success"           "$(L layout-undo | jq_ '(d["result"]["applied"], d["result"]["exact"], d["unsaved"])')" "(True, True, False)"
+check "undo put the bar back"          "$(left)" "['omarchy.clock', 'omarchy.battery']"
+setbar '{"left":[{"id":"omarchy.battery"},{"id":"omarchy.clock"}],"center":[],"right":[{"id":"omarchy.network"}]}'
+check "save keeps the edit"            "$(L layout-save | jq_ '(d["unsaved"], d["result"]["ok"])')" "(False, True)"
+setbar '{"left":[{"id":"omarchy.network"}],"center":[{"id":"omarchy.clock"}],"right":[{"id":"omarchy.battery"}]}'
+L layout-save-as --name=Focus >/dev/null
+check "save as loads the new layout"   "$(L layouts | jq_ 'd["loadedName"]')" "Focus"
+check "loading switches the bar"       "$(L layout-load --id="$WORK" | jq_ '(d["loadedName"], d["unsaved"], d["result"]["exact"])')" "('Work', False, True)"
+check "…to the saved version"          "$(left)" "['omarchy.battery', 'omarchy.clock']"
+check "rename keeps it loaded"         "$(L layout-rename --id="$WORK" --name=Desk | jq_ 'd["loadedName"]')" "Desk"
+L layout-delete --id="$WORK" >/dev/null
+check "deleting the loaded one clears" "$(L layouts | jq_ 'd["loaded"]')" "None"
+check "save with nothing loaded says so" "$(L layout-save | jq_ '"Save as new" in d["error"]')" "True"
+setbar '{"left":[{"id":"omarchy.network"}],"center":[{"id":"omarchy.clock"}],"right":[{"id":"omarchy.battery"}]}'
+check "a matching bar is detected"     "$(L layouts | jq_ '(d["loadedName"], d["detected"], d["unsaved"])')" "('Focus', True, False)"
+
+echo; echo "── a shell that writes shell.json late is still judged correctly"
+setbar '{"left":[{"id":"omarchy.clock"},{"id":"omarchy.battery"}],"center":[],"right":[{"id":"omarchy.network"}]}'
+L layout-save-as --name=Late >/dev/null
+setbar '{"left":[{"id":"omarchy.battery"},{"id":"omarchy.clock"}],"center":[],"right":[{"id":"omarchy.network"}]}'
+OUT=$(FAKE_LAG_MS=400 L layout-undo)
+check "late write still reads exact"   "$(echo "$OUT" | jq_ '(d["result"]["applied"], d["result"]["exact"])')" "(True, True)"
+check "…and not as unsaved changes"    "$(echo "$OUT" | jq_ 'd["unsaved"]')" "False"
+
+echo; echo "── a layout action leaves its outcome where a rebuilt widget can read it"
+setbar '{"left":[{"id":"omarchy.clock"},{"id":"omarchy.battery"}],"center":[],"right":[{"id":"omarchy.network"}]}'
+L layout-save-as --name=Rec >/dev/null
+check "success is recorded"            "$(L layouts | jq_ '(d["lastAction"]["action"], d["lastAction"]["pending"], d["lastAction"]["ok"])')" "('layout-save-as', False, True)"
+check "…and its file is private"       "$(stat -c %a "$ROOT/lstate/last-action.json")" "600"
+REC=$(L layouts | jq_ 'd["loaded"]')
+L layout-delete --id="$REC" >/dev/null
+L layout-save >/dev/null
+check "a refused action is recorded"   "$(L layouts | jq_ '(d["lastAction"]["action"], d["lastAction"]["ok"], "Save as new" in d["lastAction"]["note"])')" "('layout-save', False, True)"
+python3 - "$ROOT/lstate/last-action.json" <<'PY2'
+import json,sys,time; p=sys.argv[1]
+json.dump({"action":"layout-load","label":"Loading a layout","at":"x","epoch":time.time()-600,"pending":True},open(p,"w"))
+PY2
+check "an abandoned action is interrupted, not running" "$(L layouts | jq_ '(d["lastAction"]["pending"], d["lastAction"]["ok"], d["lastAction"].get("interrupted"))')" "(False, False, True)"
 
 echo; echo "── real desktop config was never touched"
 check "real OmaGuard state untouched"   "$(realstate)" "$REAL_BEFORE"

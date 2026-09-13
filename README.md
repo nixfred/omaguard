@@ -22,74 +22,76 @@ chose. Then an update lands, or an agent "helpfully" tidies a config file, or yo
 something and forget to undo it — and a week later something feels off and you cannot
 say what.
 
-**OmaGuard answers two questions from the bar:** *what changed?* and *does what I chose on
-purpose still hold?* And because you rarely want just one bar, it keeps named **bar layouts**
-you can switch between with one click.
+**OmaGuard does two things from the bar:** it keeps your bar layouts one click away, and it
+tells you when something you rely on is actually broken — and how to fix it.
 
 ## What it looks like
 
 <p align="center">
-  <img src="docs/panel.png" alt="The OmaGuard panel open on a live Omarchy desktop, showing what changed and the starred bar layouts" width="760">
+  <img src="docs/panel.png" alt="The OmaGuard panel open on a live Omarchy desktop, showing the layout list" width="620">
 </p>
 
-The shield sits on the left of the bar. Its colour is the verdict, and a number beside it
-says how many things need your attention:
+The shield sits on the left of the bar:
 
-| Shield | State | Means |
-|:---:|---|---|
-| 🟢 | **all good** | Nothing changed since you marked your setup good |
-| 🟡 | **changed** | Something changed since then — the panel lists what, in plain words |
-| 🔴 | **broken** | Something you rely on is gone, or Hyprland is reporting config errors |
-| ⚪ | **not set up** | OmaGuard has not been told what "good" looks like yet — never shown as a pass |
+| Shield | Means |
+|:---:|---|
+| 🟢 | All good — the running desktop confirms nothing is wrong |
+| 🔴 **1** | One confirmed problem, and the panel says how to fix it |
 
-Click it and the top of the panel says what happened and offers the obvious next step:
+The number only ever counts problems the **live desktop** confirms. Editing your bar never
+adds one, and a config file OmaGuard cannot read is never counted as a problem.
 
-- **Changed** lists each change — *Bar & plugins: 3 widgets moved: omarchy.monitor, …* —
-  with **Keep these changes**. One click takes a snapshot, marks it as your good setup,
-  and the warning clears. **Show me the details** opens the exact lines.
-- **Not set up** offers **This setup is good — remember it**.
-
-Below that are three tabs: **Bar layouts**, **Checks** and **History**.
-
-## Bar layouts: one click between arrangements
+## Bar layouts: your setups, one click each
 
 <p align="center">
-  <img src="docs/profiles.svg" alt="Starred layouts in the quick switch; switching moves widgets through the shell's own IPC" width="100%">
+  <img src="docs/profiles.svg" alt="Bar layouts in the OmaGuard panel; loading moves widgets through the shell's own IPC" width="100%">
 </p>
 
-A bar layout remembers which widgets are on the bar, in which section, in what order, **and
-which are pinned**. Pins matter: bars such as menubar-overload draw each side as zones, and
-a widget marked `outer` stays at the corner whatever its position in the list. A layout
-that restored order but not pins would change `shell.json` while the bar looked the same.
+Click the shield and the panel opens on your layouts:
 
-Arrange the bar, type a name — *Work*, *Focus*, *Present* — and press **Save my current bar**.
-Star it (☆ → ★) and it appears under **SWITCH BAR LAYOUT** at the top of the panel.
+- **Load** switches the bar to a layout. That layout is now *loaded*.
+- Change the bar afterwards and the panel says **“Work has unsaved changes”**, lists them in
+  plain words (*3 widgets moved: …*), and offers **Save to Work**, **Undo** and **Save as new…**.
+- **Save as new…** names the bar as it is now. The new layout becomes the loaded one.
+- **Rename** and **Delete** sit on each row. If your bar already matches a saved layout,
+  OmaGuard recognises it as loaded.
 
-Every layout says in words what switching would do before you press anything:
+A layout remembers which widgets are on the bar, in which section, in what order, **and which
+are pinned**. Pins matter: bars such as menubar-overload draw each side as zones, and a widget
+marked `outer` stays at the corner whatever its position in the list. A layout saved before
+OmaGuard recorded pins is labelled, and saving it again fixes it.
 
-- **✓ This is your bar right now**
-- **Switching will move 8 widgets and re-pin 2 widgets**
-- **Can't switch: this layout needs plugins that are not installed here: …**
-- **Same layout as Desk — you can delete the extras.**
-- Layouts saved before OmaGuard 1.3 are flagged: they carry no pin information, so switching
-  restores order only. **Update to my current bar** fixes one.
+Loading is deliberately conservative:
 
-Switching is deliberately conservative:
-
-- **It never installs anything.** A layout that needs a missing plugin names it and refuses.
-- **It never rewrites `shell.json`.** Each widget is removed, placed, moved or re-pinned
-  through the shell's own IPC — `setPluginEnabled`, `putBarWidget`, `moveBarWidget`,
+- **It never installs anything.** A layout that needs a missing plugin says so and won't load.
+- **It never rewrites `shell.json`.** Each widget is removed, placed, moved or re-pinned through
+  the shell's own IPC — `setPluginEnabled`, `putBarWidget`, `moveBarWidget`,
   `setBarWidget … zone` — inside the process that owns the file.
 - **It never changes the bar style itself**, and it refuses a bar with duplicate widgets.
-- **A failure is never reported as success.** OmaGuard stops at the first refused step and
-  shows exactly which widgets moved and which were not attempted.
-- **A click is never dropped.** If OmaGuard is busy reading, the switch waits its turn.
-- **Renaming keeps identity.** Layouts have stable IDs, so a renamed favourite stays a
-  favourite.
+- **A failure is never reported as success.** It stops at the first refused step and says which
+  widgets moved and which were not attempted.
+- **A click is never dropped.** If OmaGuard is busy, your click waits its turn.
 
-## Checks: evidence, not guesses
+## Checks: problems the running desktop confirms
 
-OmaGuard reads six files — and only these six:
+**Details › checks** lists what OmaGuard asks the live system — `hyprctl -j binds / devices /
+configerrors` and `systemctl --user` — about what your config files say should be true:
+
+| Check | A problem when |
+|---|---|
+| Hyprland config | Hyprland reports config errors |
+| Clipboard shortcuts | `clipboard.lua` exists but Ctrl+C, X or V is not bound in the running desktop |
+| Alt / Super swap | your config swaps them but no live keyboard has the swap |
+| Copy on select | the selection-copy service is installed but not running |
+
+Each check is **OK**, **PROBLEM** (with how to fix it), **CAN'T TELL** (OmaGuard could not ask —
+never a pass and never a problem) or **NOT USED**. OmaGuard **never executes Lua**, and a text
+scan that finds nothing is never a problem: a `clipboard.lua` that builds its binds in a loop
+is judged by what Hyprland actually bound.
+
+## History: snapshots, kept until you say otherwise
+
+**Details › history** keeps snapshots of the six config files OmaGuard reads:
 
 ```
 ~/.config/hypr/hyprland.lua        ~/.config/hypr/clipboard.lua
@@ -97,30 +99,8 @@ OmaGuard reads six files — and only these six:
 ~/.config/hypr/input.lua           ~/.config/omarchy/shell.json
 ```
 
-…and asks the running system what it is actually doing (`hyprctl -j binds / devices /
-configerrors`, `systemctl --user show omarchy-selection-copy.service`). Every check says
-where its answer came from:
-
-- **OK** / **CHANGED** / **BROKEN** — from a file OmaGuard read, or from the live compositor
-  or systemd
-- **CAN'T TELL** — OmaGuard could not check, and says so rather than pass it
-- **NOT USED** — nothing on this machine asks for it, so there is nothing to hold
-
-OmaGuard **never executes Lua**. It strips comments lexically and matches exact literals, so
-it can tell you `altwin:swap_alt_win` is written in every `kb_options` it found — not what
-Hyprland would compute after loading every file. Dynamically built binds are invisible to
-a text scan, and OmaGuard's own output says that.
-
-## History: every snapshot, kept until you say otherwise
-
-Press **Take snapshot** and OmaGuard stores a copy of the six files. Nothing expires
-automatically; **Delete snapshot** removes one on purpose.
-
-A first snapshot is a *candidate*, not a clean bill of health. You decide which snapshot is
-your **good setup**, and the shield measures change from there. Click any snapshot to see how
-it differs from your good setup, in plain words first and the exact lines on request.
-
-From the terminal, `preview` shows putting a single value back — never applied:
+**Take snapshot** stores one; nothing expires automatically. From a terminal you can compare a
+snapshot with another, and `preview` shows putting a single value back — never applied:
 
 ```text
 PREVIEW ONLY — nothing was written
@@ -157,17 +137,17 @@ Everything the panel does is `omaguard.py`, and every command prints one JSON ob
 ```bash
 cd ~/.config/omarchy/plugins/nixfred.omaguard
 
-python3 omaguard.py scan                          # take a snapshot now
-python3 omaguard.py status                        # history, good setup, newest snapshot
-python3 omaguard.py accept-current                # snapshot now and mark it good
-python3 omaguard.py baseline --id=<capture>       # mark an older snapshot good
-python3 omaguard.py preview  --id=<capture> --file=shell \
-                          --path='["plugins","omarchy.clock","seconds"]'
+python3 omaguard.py layouts                       # layouts, loaded one, unsaved changes, problems
+python3 omaguard.py layout-load --id=<layout>     # load a layout
+python3 omaguard.py layout-save                   # save the bar into the loaded layout
+python3 omaguard.py layout-undo                   # put the bar back to the loaded layout
+python3 omaguard.py layout-save-as --name=Focus   # save the bar as a new layout
+python3 omaguard.py health                        # the live checks, nothing written
 
-python3 omaguard.py profile-save --name=Focus     # save the bar as it is now
-python3 omaguard.py profile-favorite --id=<profile> --value=true
-python3 omaguard.py profile-plan  --id=<profile>  # what a switch would do
-python3 omaguard.py profile-apply --id=<profile>  # do it
+python3 omaguard.py scan                          # take a snapshot
+python3 omaguard.py status                        # snapshot history
+python3 omaguard.py preview  --id=<snapshot> --file=shell \
+                          --path='["plugins","omarchy.clock","seconds"]'
 ```
 
 Field paths are JSON arrays, not dotted strings: every Omarchy plugin key is itself dotted
@@ -178,13 +158,13 @@ The widget has IPC too:
 
 ```bash
 omarchy-shell nixfred.omaguard toggle
-omarchy-shell nixfred.omaguard scan
-omarchy-shell nixfred.omaguard keepChanges
-omarchy-shell nixfred.omaguard switchTo Focus
+omarchy-shell nixfred.omaguard load Focus
+omarchy-shell nixfred.omaguard save
+omarchy-shell nixfred.omaguard undo
 omarchy-shell nixfred.omaguard status
 ```
 
-Bind `switchTo` to a key and your bar layouts are one chord away.
+Bind `load Work` and `load Focus` to keys and your layouts are one chord away.
 
 ## How it is built
 
@@ -225,7 +205,7 @@ flowchart LR
 ./tests/test.sh
 ```
 
-81 checks against a throwaway `HOME` with a fake `omarchy-shell` on `PATH`, including 300
+102 checks against a throwaway `HOME` with a fake `omarchy-shell` on `PATH`, including 300
 random layout switches, pins included, that must each land exactly. The suite
 fingerprints your real OmaGuard state and `shell.json` before it starts and fails if either
 changes.

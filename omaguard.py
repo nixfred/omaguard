@@ -176,6 +176,15 @@ def observe_runtime() -> dict:
     """What the machine is actually doing right now, as distinct from what
     is written down. Every probe may be unavailable, and unavailable is a
     first-class answer — never a silent pass."""
+    fixture = os.environ.get("OMAGUARD_RUNTIME")
+    if fixture:
+        # Tests only: a recorded runtime, so checks are judged on known
+        # evidence instead of whatever compositor the test machine runs.
+        try:
+            return json.loads(Path(fixture).read_text())
+        except Exception:
+            return {k: {"status": "unavailable", "reason": "runtime fixture unreadable"}
+                    for k in ("binds", "devices", "configerrors", "service")}
     probes = {
         "binds": ["hyprctl", "-j", "binds"],
         "devices": ["hyprctl", "-j", "devices"],
@@ -297,105 +306,86 @@ def bar_widgets(shell_facts: dict) -> list[str]:
 
 
 def build_checks(facts: dict, runtime: dict) -> list[dict]:
-    """Each check carries its own certainty. 'evidence' means OmaGuard read it in
-    a file; 'observed' means OmaGuard asked the running system; 'unknown' means
-    OmaGuard could not tell — which is never reported as a pass."""
+    """Every check is judged on the live desktop. A config file only says what
+    should be true; OmaGuard reports a problem only when the running compositor
+    or systemd confirms it is not. A text scan that finds nothing is never a
+    problem: 1.3.0 flagged a working clipboard.lua as broken because it builds
+    its binds in a loop, and that warning had no way to clear.
+
+    status: ok | broken (confirmed live) | unknown (could not ask) | n/a."""
     checks: list[dict] = []
 
-    def add(name, status, detail, protected=False):
-        checks.append({"name": name, "status": status, "detail": detail,
-                       "protected": protected})
-
-    kb = facts["keyboard"]
-    add(
-        "Alt / Super swap",
-        ("ok" if kb["swapLiteral"] else "broken") if kb["options"] else "unknown",
-        (f"altwin:swap_alt_win present in every saved literal: {kb['swapLiteral']}. "
-         f"Saved: {' → '.join(kb['options'])}. Load order is not inferred.")
-        if kb["options"] else "No literal kb_options found in the captured files.",
-        protected=True,
-    )
-
-    clip = facts["clipboard"]
-    aliases = ", ".join(clip["ctrlAliases"]) or "none"
-    add(
-        "Clipboard policy",
-        "unknown" if clip["status"] == "unknown"
-        else ("ok" if clip["ctrlAliases"] else "broken"),
-        (f"Final textual require is hypr.clipboard: {clip['finalRequire']}. "
-         f"Ctrl aliases bound literally: {aliases}. "
-         f"omarchy-terminal-paste referenced: {clip['imageHelperReference']}. "
-         "Dynamically built binds are not visible to a text scan."),
-        protected=True,
-    )
-
-    keyboards = (runtime.get("devices", {}).get("data") or {}).get("keyboards")
-    if isinstance(keyboards, list) and keyboards:
-        lines = []
-        for k in keyboards:
-            opts = k.get("options") if isinstance(k.get("options"), str) else None
-            match = "matches a saved literal" if opts in kb["options"] else "differs from every saved literal"
-            lines.append(f"{k.get('name', '?')}: {opts or 'options unavailable'} — {match}")
-        live_ok = any(o in kb["options"] for o in
-                      (k.get("options") for k in keyboards if isinstance(k.get("options"), str)))
-        add("Live keyboard matches disk", "ok" if live_ok else "drift", "\n".join(lines))
-    else:
-        add("Live keyboard matches disk", "unknown",
-            "hyprctl devices unavailable, or it reported no keyboards.")
-
-    binds = runtime.get("binds", {}).get("data")
-    if not isinstance(binds, list):
-        add("Live Ctrl clipboard handlers", "unknown", "hyprctl binds unavailable.")
-    elif not clip["ctrlAliases"]:
-        # Nothing was ever asked for, so nothing can have drifted. Reporting
-        # "0 handlers" as drift on a machine with no clipboard policy is a
-        # false alarm, and false alarms are how a drift tool gets ignored.
-        add("Live Ctrl clipboard handlers", "n/a",
-            "No Ctrl clipboard aliases are saved on this machine, so there is "
-            "nothing for OmaGuard to hold the compositor to.")
-    else:
-        counts = {
-            k: sum(1 for b in binds
-                   if b.get("modmask") == 4 and str(b.get("key", "")).upper() == k)
-            for k in clip["ctrlAliases"]
-        }
-        add("Live Ctrl clipboard handlers",
-            "ok" if all(counts.values()) else "drift",
-            "; ".join(f"Ctrl+{k}: {n} handler(s) live" for k, n in counts.items())
-            + " — measured against the aliases your config asks for. "
-              "Presence only; behaviour is not verified.")
+    def add(name, status, detail, fix=""):
+        checks.append({"name": name, "status": status, "detail": detail, "fix": fix})
 
     errors = runtime.get("configerrors", {}).get("data")
     if isinstance(errors, list):
-        # Hyprland reports a clean config as [""], not []. Taking the list
-        # length at face value marks a healthy machine BROKEN with an empty
-        # reason — exactly the false alarm OmaGuard exists to avoid.
+        # Hyprland reports a clean config as [""], not [].
         real = [str(e).strip() for e in errors if str(e).strip()]
-        add("Hyprland config errors", "ok" if not real else "broken",
-            "Hyprland reports no config errors." if not real
-            else "\n".join(real[:10]))
+        if real:
+            add("Hyprland config", "broken", "Hyprland reports: " + "; ".join(real[:3]),
+                "Open the file named in the error, fix that line, then run: hyprctl reload")
+        else:
+            add("Hyprland config", "ok", "Hyprland loaded your config without errors.")
     else:
-        add("Hyprland config errors", "unknown", "hyprctl configerrors unavailable.")
+        add("Hyprland config", "unknown", "Hyprland could not be asked for config errors.")
+
+    binds = runtime.get("binds", {}).get("data")
+    if facts["clipboard"]["status"] == "unknown":
+        add("Clipboard shortcuts", "n/a", "There is no clipboard.lua here, so no clipboard policy to hold.")
+    elif not isinstance(binds, list):
+        add("Clipboard shortcuts", "unknown",
+            "clipboard.lua exists, but Hyprland's live key bindings could not be read.")
+    else:
+        missing = [k for k in ("C", "X", "V")
+                   if not any(b.get("modmask") == 4 and str(b.get("key", "")).upper() == k for b in binds)]
+        if missing:
+            keys = ", ".join("Ctrl+" + k for k in missing)
+            add("Clipboard shortcuts", "broken",
+                f"clipboard.lua is in your config, but the running desktop has nothing bound to {keys}.",
+                "Run: hyprctl reload. If it is still missing, the Hyprland config check will name the bad line.")
+        else:
+            add("Clipboard shortcuts", "ok", "Ctrl+C, Ctrl+X and Ctrl+V are bound in the running desktop.")
+
+    kb = facts["keyboard"]
+    wants_swap = any("altwin:swap_alt_win" in o.split(",") for o in kb["options"])
+    keyboards = (runtime.get("devices", {}).get("data") or {}).get("keyboards")
+    if not wants_swap:
+        add("Alt / Super swap", "n/a", "Your config does not swap Alt and Super.")
+    elif not isinstance(keyboards, list):
+        add("Alt / Super swap", "unknown",
+            "Your config swaps Alt and Super, but Hyprland's keyboards could not be read.")
+    else:
+        reported = [k for k in keyboards if isinstance(k.get("options"), str)]
+        applied = [k for k in reported if "altwin:swap_alt_win" in k["options"].split(",")]
+        if not reported:
+            add("Alt / Super swap", "unknown", "Hyprland reported no keyboard options.")
+        elif not applied:
+            add("Alt / Super swap", "broken",
+                "Your config swaps Alt and Super, but no keyboard in the running desktop has the swap.",
+                "Run: hyprctl reload")
+        else:
+            add("Alt / Super swap", "ok", f"Applied on {plural(len(applied), 'keyboard')}.")
 
     svc = runtime.get("service", {})
     if svc.get("status") == "available":
-        data = svc["data"]
-        add("Selection-copy service",
-            "ok" if data.get("ActiveState") == "active" else "drift",
-            " · ".join(f"{k}={v}" for k, v in data.items()))
+        state = svc["data"].get("ActiveState", "unknown")
+        if state == "active":
+            add("Copy on select", "ok", "The selection-copy service is running.")
+        else:
+            add("Copy on select", "broken", f"The selection-copy service is installed but {state}.",
+                "Run: systemctl --user restart omarchy-selection-copy.service")
     else:
-        add("Selection-copy service", "unknown", "systemctl --user could not be read.")
-
-    shell = facts["shell"]
-    if shell["status"] == "observed":
-        widgets = bar_widgets(shell)
-        add("Saved bar layout", "ok",
-            f"Bar: {shell.get('barId') or 'stock'} · {len(widgets)} widgets placed. "
-            + shell["reason"], protected=True)
-    else:
-        add("Saved bar layout", "unknown", shell["reason"], protected=True)
-
+        add("Copy on select", "n/a", "The selection-copy service is not installed here, or systemd could not be read.")
     return checks
+
+
+def health() -> dict:
+    """The live checks on their own: nothing is written, no snapshot taken."""
+    files = {key: read_config(key) for key in FILES}
+    checks = build_checks(gather_facts(files), observe_runtime())
+    return {"checks": checks, "problems": [c for c in checks if c["status"] == "broken"],
+            "checkedAt": iso(time.time())}
 
 
 # ── Timeline ─────────────────────────────────────────────────────────────
@@ -668,6 +658,8 @@ SECTIONS = ("left", "center", "right")
 # does not describe such a bar — a switch that restores order but not pins
 # changes shell.json while the bar looks exactly the same.
 ZONES = ("outer", "inner")
+# How long a switch waits for the shell to write shell.json before judging it.
+SETTLE_SECONDS = float(os.environ.get("OMAGUARD_SETTLE_SECONDS") or 3.0)
 
 
 def load_profiles() -> dict:
@@ -903,9 +895,12 @@ def profile_rows(data: dict, live: dict | None, have: dict) -> list[dict]:
             "sameAs": twins,
             "blocked": bool(plan and plan["blocked"]),
             "reason": plan["reason"] if plan else "The bar could not be read.",
-            "changes": plan["summary"] if plan else "",
-            "canSwitch": bool(plan) and not active and not plan["blocked"]
-                         and bool(plan["summary"]),
+            # What differs, as a person sees it. The plan's step count
+            # overstates it: one real move shifts every widget after it, and
+            # "loading will move 10 widgets" read as a far bigger change than
+            # the two widgets that actually differ.
+            "changes": "; ".join(summarize_layout(layout, live)) if live and not active else "",
+            "canSwitch": bool(plan) and not active and not plan["blocked"],
         })
     rows.sort(key=lambda r: (not r["favorite"], r["name"].lower()))
     return rows
@@ -945,9 +940,12 @@ def profile_save(name: str, pid: str = "") -> dict:
     if pid:
         target = find_profile(data, pid)
         target.update({"name": name, "layout": layout, "updated": now})
+        data["loaded"] = pid
     else:
+        new_id = str(uuid.uuid4())
+        data["loaded"] = new_id
         data["profiles"].append({
-            "id": str(uuid.uuid4()), "name": name, "favorite": False,
+            "id": new_id, "name": name, "favorite": False,
             "created": now, "updated": now, "layout": layout,
         })
     save_profiles(data)
@@ -975,6 +973,8 @@ def profile_forget(pid: str) -> dict:
     data = load_profiles()
     find_profile(data, pid)
     data["profiles"] = [p for p in data["profiles"] if p["id"] != pid]
+    if data.get("loaded") == pid:
+        data["loaded"] = None
     save_profiles(data)
     return profiles_status()
 
@@ -1005,6 +1005,7 @@ def profile_apply(pid: str, allow_partial: bool = False) -> dict:
     if b["missing"] and not allow_partial:
         raise OmaGuardError(b["missing"] + ". Switch anyway to apply the rest.")
     if plan["nothingToDo"]:
+        set_loaded(pid)
         return {"applied": True, "exact": True, "profile": plan["profile"],
                 "steps": [], "skipped": [], "incomplete": plan["incomplete"],
                 "note": "This layout is already what the bar is showing."}
@@ -1036,7 +1037,6 @@ def profile_apply(pid: str, allow_partial: bool = False) -> dict:
         step("pin" if entry["zone"] else "unpin", entry["id"],
              ["shell", "setBarWidget", entry["id"], "zone", json.dumps(entry["zone"]), "{}"])
 
-    after = live_layout()
     target = find_profile(load_profiles(), pid)["layout"]
     if plan["missing"]:
         gone = set(plan["missing"])
@@ -1045,7 +1045,21 @@ def profile_apply(pid: str, allow_partial: bool = False) -> dict:
                                for sec in SECTIONS},
                   **({"zones": {w: z for w, z in target["zones"].items() if w not in gone}}
                      if has_zones(target) else {})}
-    matched = same_layout(target, after)
+    # The shell answers each verb before it writes shell.json. Reading the
+    # file straight away judged a switch that had fully landed as "does not
+    # match exactly" — measured in the Test Drive VM, where the same bar read
+    # correct two seconds later. Wait for the file to catch up, bounded.
+    after, matched = live_layout(), False
+    if not failed:
+        deadline = time.monotonic() + SETTLE_SECONDS
+        while True:
+            after = live_layout()
+            matched = same_layout(target, after)
+            if matched or time.monotonic() >= deadline:
+                break
+            time.sleep(0.15)
+    else:
+        matched = same_layout(target, after)
     name = plan["profile"]["name"]
     if failed:
         note = ("Stopped at the first failure. The bar is part-way between two layouts; "
@@ -1059,6 +1073,8 @@ def profile_apply(pid: str, allow_partial: bool = False) -> dict:
                      "were left as they were.")
     else:
         note = "Applied, but the bar does not match the layout exactly — read the steps below."
+    if not failed and matched:
+        set_loaded(pid)
     return {
         "applied": not failed,
         "exact": matched,
@@ -1068,6 +1084,197 @@ def profile_apply(pid: str, allow_partial: bool = False) -> dict:
         "incomplete": plan["incomplete"],
         "note": note,
     }
+
+
+# ── Layouts are your setups ─────────────────────────────────────────────
+# One idea: the loaded layout. Loading one makes it loaded; a later bar change
+# is "unsaved changes" to it, answered by Save, Undo or Save as new.
+def set_loaded(pid: str | None) -> None:
+    data = load_profiles()
+    data["loaded"] = pid
+    save_profiles(data)
+
+
+def summarize_layout(want: dict, live: dict) -> list[str]:
+    """What differs between a saved layout and the bar, in sentences."""
+    out = []
+    wsec = {w: s for s in SECTIONS for w in want["sections"].get(s, [])}
+    lsec = {w: s for s in SECTIONS for w in live["sections"].get(s, [])}
+    added = [w for w in lsec if w not in wsec]
+    removed = [w for w in wsec if w not in lsec]
+    if added:
+        out.append("Added to the bar: " + name_list(added))
+    if removed:
+        out.append("Taken off the bar: " + name_list(removed))
+    moved = [w for w in lsec if w in wsec and wsec[w] != lsec[w]]
+    for sec in SECTIONS:
+        a = [w for w in want["sections"].get(sec, []) if lsec.get(w) == sec]
+        b = [w for w in live["sections"].get(sec, []) if wsec.get(w) == sec]
+        keep = _lcs(a, b)
+        moved += [w for w in b if w not in keep]
+    moved = list(dict.fromkeys(moved))
+    if moved:
+        out.append(plural(len(moved), "widget") + " moved: " + name_list(moved))
+    if has_zones(want):
+        wz, lz = want["zones"], live.get("zones") or {}
+        pins = [w for w in lsec if w in wsec and wz.get(w, "") != lz.get(w, "")]
+        if pins:
+            out.append(plural(len(pins), "widget") + " pinned or unpinned: " + name_list(pins))
+    if want.get("barId") != live.get("barId"):
+        out.append("Bar style changed")
+    return out
+
+
+def layouts_status(result: dict | None = None) -> dict:
+    data = load_profiles()
+    try:
+        live, error = live_layout(), ""
+    except OmaGuardError as exc:
+        live, error = None, str(exc)
+    have = installed_plugins()
+    rows = profile_rows(data, live, have)
+    ids = {r["id"] for r in rows}
+    loaded = data.get("loaded") if data.get("loaded") in ids else None
+    detected = False
+    if not loaded:
+        # Nothing loaded yet, but the bar matches a saved layout exactly: that
+        # layout is what you are using, so say so instead of "not saved".
+        match = next((r for r in rows if r["active"]), None)
+        if match:
+            loaded, detected = match["id"], True
+    profile = next((p for p in data["profiles"] if p["id"] == loaded), None)
+    unsaved = bool(profile and live and not same_layout(profile["layout"], live))
+    changes = summarize_layout(profile["layout"], live) if unsaved else []
+    if unsaved and not changes:
+        changes = ["The bar differs from this layout"]
+    undo_reason = ""
+    if unsaved:
+        row = next(r for r in rows if r["id"] == loaded)
+        undo_reason = row["reason"] if row["blocked"] else ""
+    for r in rows:
+        r["loaded"] = r["id"] == loaded
+    h = health()
+    out = {
+        "version": VERSION,
+        "layouts": rows,
+        "loaded": loaded,
+        "loadedName": profile["name"] if profile else None,
+        "detected": detected,
+        "unsaved": unsaved,
+        "unsavedChanges": changes,
+        "canUndo": unsaved and not undo_reason,
+        "undoReason": undo_reason,
+        "problems": h["problems"],
+        "checks": h["checks"],
+        "checkedAt": h["checkedAt"],
+        "liveError": error or ("" if have else "The shell did not list its plugins, so layouts can't be loaded."),
+        "lastAction": last_action(),
+    }
+    if result is not None:
+        out["result"] = result
+    return out
+
+
+# The bar rebuilds every widget in a section whenever shell.json changes, so
+# the OmaGuard widget is destroyed by the first move of any switch it runs —
+# measured in Test Drive: a new widget instance after every IPC move, the
+# switch killed part-way, its result gone with the old instance. Layout
+# actions therefore run detached from the widget and leave their outcome
+# here, where whichever widget instance exists next can read it.
+LAST_ACTION_FILE = "last-action.json"
+INTERRUPTED_AFTER = 60.0
+LAYOUT_ACTIONS = {
+    "layout-load": "Loading a layout", "layout-save": "Saving",
+    "layout-save-as": "Saving as new", "layout-undo": "Undoing",
+    "layout-rename": "Renaming", "layout-delete": "Deleting",
+}
+
+
+def record_action(action: str, payload: dict) -> None:
+    now = time.time()
+    write_own(LAST_ACTION_FILE, {"action": action, "label": LAYOUT_ACTIONS.get(action, action),
+                                 "at": iso(now), "epoch": now, **payload})
+
+
+def last_action() -> dict | None:
+    try:
+        rec = json.loads(read_own(secure_state() / LAST_ACTION_FILE))
+    except Exception:
+        return None
+    if not isinstance(rec, dict):
+        return None
+    if rec.get("pending") and time.time() - float(rec.get("epoch") or 0) > INTERRUPTED_AFTER:
+        # Never let a dead action read as still running, or as done.
+        rec = {**rec, "pending": False, "ok": False, "interrupted": True,
+               "note": rec.get("label", "The last action") + " did not finish. Check the bar, then try again."}
+    return rec
+
+
+def run_layout_action(command: str, args) -> dict:
+    record_action(command, {"pending": True})
+    try:
+        if command == "layout-load":
+            out = layout_load(args.id)
+        elif command == "layout-save":
+            out = layout_save()
+        elif command == "layout-save-as":
+            out = layout_save_as(args.name)
+        elif command == "layout-undo":
+            out = layout_undo()
+        elif command == "layout-rename":
+            out = layout_rename(args.id, args.name)
+        else:
+            out = layout_delete(args.id)
+    except Exception as exc:
+        record_action(command, {"pending": False, "ok": False, "note": str(exc) or type(exc).__name__})
+        raise
+    r = out.get("result") or {}
+    ok = r.get("ok") is True or (r.get("applied") is True and r.get("exact") is not False)
+    record_action(command, {"pending": False, "ok": ok, "note": r.get("note", ""),
+                            "steps": [st for st in r.get("steps", []) if st.get("ok") is False or st.get("result") == "not attempted"]})
+    out["lastAction"] = last_action()
+    return out
+
+
+def layout_load(pid: str) -> dict:
+    return layouts_status(profile_apply(pid))
+
+
+def layout_save() -> dict:
+    data = load_profiles()
+    loaded = data.get("loaded")
+    if not loaded or not any(p["id"] == loaded for p in data["profiles"]):
+        raise OmaGuardError("No layout is loaded to save into. Use Save as new to name this bar.")
+    name = find_profile(data, loaded)["name"]
+    profile_save(name, loaded)
+    return layouts_status({"ok": True, "note": f"Saved the bar into {name}."})
+
+
+def layout_save_as(name: str) -> dict:
+    profile_save(name)
+    return layouts_status({"ok": True, "note": f"Saved as {name.strip()}. It is now your loaded layout."})
+
+
+def layout_undo() -> dict:
+    data = load_profiles()
+    loaded = data.get("loaded")
+    if not loaded or not any(p["id"] == loaded for p in data["profiles"]):
+        raise OmaGuardError("No layout is loaded, so there is nothing to go back to.")
+    result = profile_apply(loaded)
+    if result.get("applied") and result.get("exact"):
+        result["note"] = "Undone. The bar is back to " + result["profile"]["name"] + "."
+    return layouts_status(result)
+
+
+def layout_rename(pid: str, name: str) -> dict:
+    profile_set(pid, name=name)
+    return layouts_status({"ok": True, "note": f"Renamed to {name.strip()}."})
+
+
+def layout_delete(pid: str) -> dict:
+    name = find_profile(load_profiles(), pid)["name"]
+    profile_forget(pid)
+    return layouts_status({"ok": True, "note": f"Deleted {name}."})
 
 
 # ── Plain-language change summaries ─────────────────────────────────────
@@ -1158,7 +1365,7 @@ def accept_current() -> dict:
     return status()
 
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 
 def main(argv: list[str]) -> int:
@@ -1166,7 +1373,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("command",
                         choices=["scan", "status", "snapshot", "baseline", "preview", "forget",
                                  "profiles", "profile-save", "profile-rename", "profile-favorite",
-                                 "profile-forget", "profile-plan", "profile-apply", "accept-current"])
+                                 "profile-forget", "profile-plan", "profile-apply", "accept-current",
+                                 "health", "layouts", "layout-load", "layout-save", "layout-save-as",
+                                 "layout-undo", "layout-rename", "layout-delete"])
     parser.add_argument("--id", default="")
     parser.add_argument("--file", default="")
     parser.add_argument("--name", default="")
@@ -1190,6 +1399,12 @@ def main(argv: list[str]) -> int:
         elif args.command == "baseline":
             accept_baseline(args.id)
             result = status()
+        elif args.command == "health":
+            result = health()
+        elif args.command == "layouts":
+            result = layouts_status()
+        elif args.command in LAYOUT_ACTIONS:
+            result = run_layout_action(args.command, args)
         elif args.command == "accept-current":
             result = accept_current()
         elif args.command == "profiles":
