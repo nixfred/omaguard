@@ -23,51 +23,71 @@ something and forget to undo it — and a week later something feels off and you
 say what.
 
 **OmaGuard answers two questions from the bar:** *what changed?* and *does what I chose on
-purpose still hold?* And because you rarely want just one bar, it keeps named **profiles**
+purpose still hold?* And because you rarely want just one bar, it keeps named **bar layouts**
 you can switch between with one click.
 
 ## What it looks like
 
 <p align="center">
-  <img src="docs/panel.png" alt="The OmaGuard panel open on a live Omarchy desktop, showing the Desk profile starred in the quick switch" width="760">
+  <img src="docs/panel.png" alt="The OmaGuard panel open on a live Omarchy desktop, showing what changed and the starred bar layouts" width="760">
 </p>
 
-The shield sits on the left of the bar. Its colour is the verdict:
+The shield sits on the left of the bar. Its colour is the verdict, and a number beside it
+says how many things need your attention:
 
 | Shield | State | Means |
 |:---:|---|---|
-| 🟢 | **holding** | Every preference you protect still reads the way you left it |
-| 🟡 | **drift** | Something changed since the reference you accepted |
-| 🔴 | **broken** | A protected preference is gone, or Hyprland is reporting config errors |
-| ⚪ | **unknown** | OmaGuard has not been told what "correct" is yet — never shown as a pass |
+| 🟢 | **all good** | Nothing changed since you marked your setup good |
+| 🟡 | **changed** | Something changed since then — the panel lists what, in plain words |
+| 🔴 | **broken** | Something you rely on is gone, or Hyprland is reporting config errors |
+| ⚪ | **not set up** | OmaGuard has not been told what "good" looks like yet — never shown as a pass |
 
-Click it for three views: **Profiles**, **Preferences** and **Timeline**.
+Click it and the top of the panel says what happened and offers the obvious next step:
 
-## Profiles: one click between bar layouts
+- **Changed** lists each change — *Bar & plugins: 3 widgets moved: omarchy.monitor, …* —
+  with **Keep these changes**. One click takes a snapshot, marks it as your good setup,
+  and the warning clears. **Show me the details** opens the exact lines.
+- **Not set up** offers **This setup is good — remember it**.
+
+Below that are three tabs: **Bar layouts**, **Checks** and **History**.
+
+## Bar layouts: one click between arrangements
 
 <p align="center">
-  <img src="docs/profiles.svg" alt="Starred profiles in the quick switch; switching moves widgets through the shell's own IPC" width="100%">
+  <img src="docs/profiles.svg" alt="Starred layouts in the quick switch; switching moves widgets through the shell's own IPC" width="100%">
 </p>
 
-A profile remembers which widgets are on the bar, in which section, and in what order.
-Arrange the bar, type a name — *Work*, *Focus*, *Present* — and press **Save current bar**.
-Star it (☆ → ★) and it appears under **SWITCH TO** at the top of the panel.
+A bar layout remembers which widgets are on the bar, in which section, in what order, **and
+which are pinned**. Pins matter: bars such as menubar-overload draw each side as zones, and
+a widget marked `outer` stays at the corner whatever its position in the list. A layout
+that restored order but not pins would change `shell.json` while the bar looked the same.
+
+Arrange the bar, type a name — *Work*, *Focus*, *Present* — and press **Save my current bar**.
+Star it (☆ → ★) and it appears under **SWITCH BAR LAYOUT** at the top of the panel.
+
+Every layout says in words what switching would do before you press anything:
+
+- **✓ This is your bar right now**
+- **Switching will move 8 widgets and re-pin 2 widgets**
+- **Can't switch: this layout needs plugins that are not installed here: …**
+- **Same layout as Desk — you can delete the extras.**
+- Layouts saved before OmaGuard 1.3 are flagged: they carry no pin information, so switching
+  restores order only. **Update to my current bar** fixes one.
 
 Switching is deliberately conservative:
 
-- **It never installs anything.** A profile that needs a plugin this machine does not have
-  is marked ⚠, names the missing plugin, and refuses to switch.
-- **It never rewrites `shell.json`.** Each widget is removed, placed or moved through the
-  shell's own IPC — `setPluginEnabled`, `putBarWidget`, `moveBarWidget` — inside the process
-  that owns the file. Other tools editing the bar at the same time keep their changes.
-- **It never switches the bar plugin itself.** A profile saved under a different bar is
-  refused rather than half-applied.
+- **It never installs anything.** A layout that needs a missing plugin names it and refuses.
+- **It never rewrites `shell.json`.** Each widget is removed, placed, moved or re-pinned
+  through the shell's own IPC — `setPluginEnabled`, `putBarWidget`, `moveBarWidget`,
+  `setBarWidget … zone` — inside the process that owns the file.
+- **It never changes the bar style itself**, and it refuses a bar with duplicate widgets.
 - **A failure is never reported as success.** OmaGuard stops at the first refused step and
   shows exactly which widgets moved and which were not attempted.
-- **Renaming keeps identity.** Profiles have stable IDs, so a renamed favourite stays a
+- **A click is never dropped.** If OmaGuard is busy reading, the switch waits its turn.
+- **Renaming keeps identity.** Layouts have stable IDs, so a renamed favourite stays a
   favourite.
 
-## Preferences: evidence, not guesses
+## Checks: evidence, not guesses
 
 OmaGuard reads six files — and only these six:
 
@@ -81,25 +101,26 @@ OmaGuard reads six files — and only these six:
 configerrors`, `systemctl --user show omarchy-selection-copy.service`). Every check says
 where its answer came from:
 
-- **evidence** — OmaGuard read it in a file
-- **observed** — OmaGuard asked the live compositor or systemd
-- **unknown** — OmaGuard could not tell, and says so
+- **OK** / **CHANGED** / **BROKEN** — from a file OmaGuard read, or from the live compositor
+  or systemd
+- **CAN'T TELL** — OmaGuard could not check, and says so rather than pass it
+- **NOT USED** — nothing on this machine asks for it, so there is nothing to hold
 
 OmaGuard **never executes Lua**. It strips comments lexically and matches exact literals, so
 it can tell you `altwin:swap_alt_win` is written in every `kb_options` it found — not what
 Hyprland would compute after loading every file. Dynamically built binds are invisible to
 a text scan, and OmaGuard's own output says that.
 
-## Timeline: every capture, kept until you say otherwise
+## History: every snapshot, kept until you say otherwise
 
-Press **Capture now** and OmaGuard stores a snapshot. Nothing expires automatically; storage
-used is shown in the panel header, and **Forget** removes one capture on purpose.
+Press **Take snapshot** and OmaGuard stores a copy of the six files. Nothing expires
+automatically; **Delete snapshot** removes one on purpose.
 
-A first capture is a *candidate*, not a clean bill of health. You decide which capture is
-your **reference** — the state you accept — and OmaGuard measures drift from there.
+A first snapshot is a *candidate*, not a clean bill of health. You decide which snapshot is
+your **good setup**, and the shield measures change from there. Click any snapshot to see how
+it differs from your good setup, in plain words first and the exact lines on request.
 
-Open any capture to see what differs from your reference as a unified diff, and preview
-putting a single value back:
+From the terminal, `preview` shows putting a single value back — never applied:
 
 ```text
 PREVIEW ONLY — nothing was written
@@ -112,9 +133,7 @@ Only the one value you picked differs. Everything else in the current file is ke
 ```
 
 OmaGuard refuses to preview a whole `shell.json`, a whole section, or an array position
-(entries may have moved) — because restoring those silently reverts changes you made
-since. The hash is the precondition for any manual restore: if the file has changed
-since the preview, the preview no longer describes it.
+(entries may have moved), because restoring those silently reverts changes you made since.
 
 ## Install
 
@@ -138,9 +157,10 @@ Everything the panel does is `omaguard.py`, and every command prints one JSON ob
 ```bash
 cd ~/.config/omarchy/plugins/nixfred.omaguard
 
-python3 omaguard.py scan                          # capture now
-python3 omaguard.py status                        # timeline, reference, newest capture
-python3 omaguard.py baseline --id=<capture>       # accept a reference
+python3 omaguard.py scan                          # take a snapshot now
+python3 omaguard.py status                        # history, good setup, newest snapshot
+python3 omaguard.py accept-current                # snapshot now and mark it good
+python3 omaguard.py baseline --id=<capture>       # mark an older snapshot good
 python3 omaguard.py preview  --id=<capture> --file=shell \
                           --path='["plugins","omarchy.clock","seconds"]'
 
@@ -159,11 +179,12 @@ The widget has IPC too:
 ```bash
 omarchy-shell nixfred.omaguard toggle
 omarchy-shell nixfred.omaguard scan
+omarchy-shell nixfred.omaguard keepChanges
 omarchy-shell nixfred.omaguard switchTo Focus
 omarchy-shell nixfred.omaguard status
 ```
 
-Bind `switchTo` to a key and your profiles are one chord away.
+Bind `switchTo` to a key and your bar layouts are one chord away.
 
 ## How it is built
 
@@ -183,7 +204,7 @@ flowchart LR
 - **The widget owns its data.** There is no `service` entry point. Under a third-party
   bar, `bar.shell.serviceFor()` returns `null` for every plugin — including a widget's own
   service — and nothing logs it. OmaGuard runs its helper directly so it works under any bar.
-- **No command strings.** Every subprocess is a fixed argv list; a plugin id or profile
+- **No command strings.** Every subprocess is a fixed argv list; a plugin id or layout
   name is never interpolated into a shell.
 - **A silent outage is not allowed to look calm.** A missing `python3` (exit 127), an empty
   reply or a timeout turns the shield red with the reason in the panel.
@@ -193,10 +214,10 @@ flowchart LR
 - OmaGuard **writes only its own state**: `~/.local/state/omaguard` (0700), files 0600, atomic.
 - OmaGuard **never writes desktop config** during capture or preview. Restores are previews.
 - Profile switching **does** change the bar — through the shell's supported IPC, one widget
-  at a time, and only when you click a profile.
+  at a time, and only when you switch a bar layout.
 - Captures can include anything you put in those six files. They stay on this machine;
   OmaGuard makes no network calls.
-- A reference is a choice, not a certification. *Different* is not automatically *wrong*.
+- A good setup is your choice, not a certification. *Different* is not automatically *wrong*.
 
 ## Tests
 
@@ -204,8 +225,8 @@ flowchart LR
 ./tests/test.sh
 ```
 
-65 checks against a throwaway `HOME` with a fake `omarchy-shell` on `PATH`, including 300
-random profile switches that must each land in exact order. The suite
+81 checks against a throwaway `HOME` with a fake `omarchy-shell` on `PATH`, including 300
+random layout switches, pins included, that must each land exactly. The suite
 fingerprints your real OmaGuard state and `shell.json` before it starts and fails if either
 changes.
 

@@ -128,7 +128,11 @@ if os.environ.get("FAIL_ON") and os.environ["FAIL_ON"] in a:
     print("refused by shell"); sys.exit()
 if a[1] == "setPluginEnabled": pull(a[2])
 elif a[1] in ("putBarWidget", "moveBarWidget"):
-    e = pull(a[2]); p = json.loads(a[3]); L[p["section"]].insert(p["index"], e)
+    e = pull(a[2]); p = json.loads(a[3]); L[p["section"]].insert(min(p["index"], len(L[p["section"]])), e)
+elif a[1] == "setBarWidget":
+    for s in L:
+        for e in L[s]:
+            if e["id"] == a[2]: e[a[3]] = json.loads(a[4])
 json.dump(d, open(cfg, "w")); print("ok")
 SH
 chmod +x "$FAKEBIN/omarchy-shell"
@@ -184,6 +188,46 @@ g profile-forget --id="$GHOST" >/dev/null
 check "profile forgotten"            "$(g profiles | jq_ 'len(d["profiles"])')" "2"
 check "profiles file is 0600"        "$(stat -c %a "$ROOT/state/profiles.json")" "600"
 
+echo; echo "── layouts: pins are part of a layout, and the panel speaks plainly"
+: > "$CALLS"
+setbar '{"left":[{"id":"omarchy.clock","zone":"outer"},{"id":"omarchy.battery"}],"center":[],"right":[]}'
+g profile-save --name=Pinned >/dev/null
+PIN=$(g profiles | jq_ '[p["id"] for p in d["profiles"] if p["name"]=="Pinned"][0]')
+check "pins are recorded on save"     "$(g profiles | jq_ '[p["pinned"] for p in d["profiles"] if p["name"]=="Pinned"][0]')" "1"
+setbar '{"left":[{"id":"omarchy.clock"},{"id":"omarchy.battery"}],"center":[],"right":[]}'
+check "an unpinned bar is not active" "$(g profiles | jq_ '[p["active"] for p in d["profiles"] if p["name"]=="Pinned"][0]')" "False"
+check "row says what switching does"  "$(g profiles | jq_ '[p["changes"] for p in d["profiles"] if p["name"]=="Pinned"][0]')" "re-pin 1 widget"
+OUT=$(g profile-apply --id="$PIN")
+check "switch restores the pin"       "$(python3 -c "import json;print(json.load(open('$OMAGUARD_HOME/.config/omarchy/shell.json'))['bar']['layout']['left'][0].get('zone'))")" "outer"
+check "pin switch is exact"           "$(echo "$OUT" | jq_ 'd["exact"]')" "True"
+check "pins go through setBarWidget"  "$(grep -c '"setBarWidget", "omarchy.clock", "zone"' "$CALLS")" "1"
+check "active layout cannot switch"   "$(g profiles | jq_ '[p["canSwitch"] for p in d["profiles"] if p["name"]=="Pinned"][0]')" "False"
+python3 - "$ROOT/state/profiles.json" <<'PY2'
+import json,sys; p=sys.argv[1]; d=json.load(open(p))
+for x in d["profiles"]:
+    if x["name"]=="Pinned":
+        old=json.loads(json.dumps(x)); old["id"]="33333333-3333-4333-8333-333333333333"; old["name"]="Old"; old["favorite"]=False
+        del old["layout"]["zones"]; d["profiles"].append(old)
+json.dump(d,open(p,"w"))
+PY2
+chmod 600 "$ROOT/state/profiles.json"
+check "old layout is flagged"         "$(g profiles | jq_ '[p["incomplete"] for p in d["profiles"] if p["name"]=="Old"][0]')" "True"
+# An old layout has no pin information, so it can only be matched on order —
+# and in order it equals both Desk and Pinned. Naming both is the honest answer.
+check "duplicate layouts are named"   "$(g profiles | jq_ '[p["sameAs"] for p in d["profiles"] if p["name"]=="Old"][0]')" "['Desk', 'Pinned']"
+g profile-forget --id=33333333-3333-4333-8333-333333333333 >/dev/null
+g profile-forget --id="$PIN" >/dev/null
+
+echo; echo "── one click clears a drift you agree with"
+g scan >/dev/null
+g baseline --id="$(g status | jq_ 'd["timeline"][-1]["id"]')" >/dev/null
+setbar '{"left":[{"id":"omarchy.battery"},{"id":"omarchy.clock","zone":"outer"}],"center":[],"right":[{"id":"omarchy.network"}]}'
+g scan >/dev/null
+check "drift is summarised in words"  "$(g status | jq_ 'any("moved" in line or "Added" in line for c in d["comparison"]["changes"] for line in c["summary"])')" "True"
+g accept-current >/dev/null
+check "accept-current clears drift"   "$(g status | jq_ 'len(d["comparison"]["changes"])')" "0"
+check "…and marks the newest as good" "$(g status | jq_ 'd["baseline"] == d["timeline"][-1]["id"]')" "True"
+
 echo; echo "── profiles: Grok's review cases — duplicates fail closed, partials judged honestly"
 setbar '{"left":[{"id":"omarchy.clock"}],"center":[],"right":[]}'
 g profile-save --name=Solo >/dev/null
@@ -236,17 +280,20 @@ guard = sys.argv[1]
 home, state = os.environ["OMAGUARD_HOME"], os.environ["OMAGUARD_STATE"] + "-stress"
 cfg = os.path.join(home, ".config/omarchy/shell.json")
 env = dict(os.environ, OMAGUARD_STATE=state)
-# the fake shell above lists omarchy.clock/battery/network; widen it for this run
 pool = ["omarchy.clock", "omarchy.battery", "omarchy.network"]
 rng = random.Random(20260912)
 def layout():
     ids = rng.sample(pool, rng.randint(1, len(pool)))
     L = {"left": [], "center": [], "right": []}
-    for i in ids: L[rng.choice(list(L))].append({"id": i})
+    for i in ids:
+        e = {"id": i}
+        z = rng.choice(["", "", "outer", "inner"])
+        if z: e["zone"] = z
+        L[rng.choice(list(L))].append(e)
     return L
 def setbar(L): json.dump({"bar": {"id": "x", "layout": L}, "plugins": {}}, open(cfg, "w"))
 def g(*a): return json.loads(subprocess.run(["python3", guard, *a], env=env, capture_output=True, text=True).stdout)
-norm = lambda L: {s: [e["id"] for e in L[s]] for s in ("left", "center", "right")}
+norm = lambda L: {s: [(e["id"], e.get("zone") or "") for e in L[s]] for s in ("left", "center", "right")}
 bad = 0
 for _ in range(300):
     subprocess.run(["rm", "-rf", state])
@@ -254,8 +301,6 @@ for _ in range(300):
     pid = g("profile-save", "--name=T")["profiles"][0]["id"]
     setbar(layout())
     out = g("profile-apply", f"--id={pid}")
-    # An error reply has no "exact" key at all. Treating a missing key as a
-    # pass is how a crashing switch once scored 97% here.
     if "error" in out or out.get("exact") is not True or norm(json.load(open(cfg))["bar"]["layout"]) != norm(want):
         bad += 1
 subprocess.run(["rm", "-rf", state])

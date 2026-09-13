@@ -479,6 +479,9 @@ def compare_to_baseline(snap: dict) -> dict:
                 "diff": diff_text(a.get("text", f"[{a.get('status')}]"),
                                   b.get("text", f"[{b.get('status')}]")),
             })
+    for change in changes:
+        change["summary"] = summarize_change(change["file"], ref["files"].get(change["file"], {}),
+                                             snap["files"].get(change["file"], {}))
     return {"baseline": baseline, "changes": changes,
             "meaning": "Differences from the reference you accepted. "
                        "Different is not automatically wrong."}
@@ -649,11 +652,10 @@ def forget(snap_id: str) -> dict:
 
 # ── Profiles: named bar layouts you can switch between ──────────────────
 # A profile is a *wanted* state of the bar: which widgets are on it, in which
-# section, in what order. Switching applies that through the shell's own IPC
-# verbs — putBarWidget / moveBarWidget / setPluginEnabled — one widget at a
-# time, inside the process that owns shell.json. OmaGuard never rewrites
-# shell.json itself: a dozen agent sessions may be editing the bar at once and
-# a whole-file write reverts every one of them.
+# section, in what order, and which are pinned to a zone. Switching applies
+# that through the shell's own IPC verbs — putBarWidget / moveBarWidget /
+# setPluginEnabled / setBarWidget — one widget at a time, inside the process
+# that owns shell.json. OmaGuard never rewrites shell.json itself.
 #
 # Switching NEVER installs anything. A profile naming a plugin this machine
 # does not have is reported as blocked, with the names, and nothing is applied
@@ -661,7 +663,11 @@ def forget(snap_id: str) -> dict:
 PROFILES_FILE = "profiles.json"
 RENAMED_WIDGET = ("nixfred.guard", "nixfred.omaguard")
 SECTIONS = ("left", "center", "right")
-SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+# Bars like menubar-overload draw each side as zones: an entry marked "outer"
+# or "inner" stays pinned there whatever its position in the list. Order alone
+# does not describe such a bar — a switch that restores order but not pins
+# changes shell.json while the bar looks exactly the same.
+ZONES = ("outer", "inner")
 
 
 def load_profiles() -> dict:
@@ -671,10 +677,8 @@ def load_profiles() -> dict:
         return {"schema": 1, "profiles": []}
     if not isinstance(data, dict) or not isinstance(data.get("profiles"), list):
         return {"schema": 1, "profiles": []}
-    # Renamed from Guard in 1.2.0: a bar saved before the rename holds this
-    # widget as nixfred.guard, which no longer exists, so every such profile
-    # would read "not installed" and refuse to switch. Rewrite the id in place,
-    # once, and never where the profile already carries the new id.
+    # Renamed from Guard in 1.2.0: rewrite the widget id in place, once, and
+    # never where the profile already carries the new id.
     changed = False
     for prof in data["profiles"]:
         sections = (prof.get("layout") or {}).get("sections") or {}
@@ -683,6 +687,9 @@ def load_profiles() -> dict:
             for sec in SECTIONS:
                 sections[sec] = [RENAMED_WIDGET[1] if w == RENAMED_WIDGET[0] else w
                                  for w in sections.get(sec, [])]
+            zones = (prof.get("layout") or {}).get("zones")
+            if isinstance(zones, dict) and RENAMED_WIDGET[0] in zones:
+                zones[RENAMED_WIDGET[1]] = zones.pop(RENAMED_WIDGET[0])
             changed = True
     if changed:
         save_profiles(data)
@@ -702,8 +709,8 @@ def find_profile(data: dict, pid: str) -> dict:
 
 def shell_ipc(args: list[str]) -> str:
     """One omarchy-shell call. Arguments are a fixed argv list — there is no
-    shell string anywhere in OmaGuard, so a plugin id can never be interpolated
-    into a command."""
+    shell string anywhere in OmaGuard, so a plugin id can never be
+    interpolated into a command."""
     try:
         proc = subprocess.run(
             ["omarchy-shell"] + args,
@@ -720,9 +727,6 @@ def shell_ipc(args: list[str]) -> str:
 
 
 def installed_plugins() -> dict:
-    """Every plugin the shell has actually discovered, by id. `enabled` here
-    means "in the bar" for a bar-widget, which is not the same as a service
-    being loaded — OmaGuard only ever uses it for bar widgets."""
     try:
         rows = json.loads(shell_ipc(["shell", "listPlugins"]))
     except (ValueError, OmaGuardError):
@@ -731,9 +735,7 @@ def installed_plugins() -> dict:
 
 
 def live_layout() -> dict:
-    """The bar as it is right now, read from the saved shell.json. Order is the
-    whole point: a profile that restores the set but not the order has not
-    restored the bar."""
+    """The bar as it is right now: order per section, plus pinned zones."""
     capture = read_config("shell")
     if capture["status"] != "present":
         raise OmaGuardError("shell.json could not be read, so the bar cannot be captured")
@@ -743,23 +745,28 @@ def live_layout() -> dict:
         layout = bar.get("layout") or {}
     except Exception:
         raise OmaGuardError("shell.json is not valid JSON, so the bar cannot be captured")
-    out = {"barId": bar.get("id"), "sections": {}}
+    out = {"barId": bar.get("id"), "sections": {}, "zones": {}}
     for section in SECTIONS:
         ids = []
         for entry in layout.get(section) or []:
             if isinstance(entry, dict) and isinstance(entry.get("id"), str):
                 ids.append(entry["id"])
+                if entry.get("zone") in ZONES:
+                    out["zones"][entry["id"]] = entry["zone"]
             elif isinstance(entry, str):
                 ids.append(entry)
         out["sections"][section] = ids
     return out
 
 
+def has_zones(layout: dict) -> bool:
+    return isinstance(layout.get("zones"), dict)
+
+
 def duplicate_ids(layout: dict) -> list[str]:
     """Widgets that appear more than once. The shell's verbs address a widget
-    by id alone, so two copies of one id cannot be told apart, moved
-    separately, or removed one at a time. OmaGuard refuses such a bar rather than
-    report a switch it cannot actually perform."""
+    by id alone, so two copies cannot be told apart. OmaGuard refuses such a
+    bar rather than report a switch it cannot actually perform."""
     seen, dup = set(), set()
     for sec in SECTIONS:
         for w in layout["sections"].get(sec, []):
@@ -767,34 +774,138 @@ def duplicate_ids(layout: dict) -> list[str]:
     return sorted(dup)
 
 
-def layout_signature(layout: dict) -> str:
-    return sha(json.dumps([layout.get("barId"),
-                           [layout["sections"].get(s, []) for s in SECTIONS]],
-                          sort_keys=True))
+def layout_signature(layout: dict, with_zones: bool = True) -> str:
+    parts = [layout.get("barId"), [layout["sections"].get(s, []) for s in SECTIONS]]
+    if with_zones:
+        parts.append(sorted((layout.get("zones") or {}).items()))
+    return sha(json.dumps(parts, sort_keys=True))
 
 
-def profile_rows(data: dict, live: dict | None = None) -> list[dict]:
-    if live is None:
-        try:
-            live = live_layout()
-        except OmaGuardError:
-            live = None
-    signature = layout_signature(live) if live else None
-    have = installed_plugins()
+def same_layout(profile_layout: dict, live: dict) -> bool:
+    # A profile saved before pins were recorded can only be compared on order.
+    zones = has_zones(profile_layout)
+    return layout_signature(profile_layout, zones) == layout_signature(live, zones)
+
+
+def plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def name_list(ids, limit: int = 4) -> str:
+    ids = list(ids)
+    head = ", ".join(ids[:limit])
+    return head + (f" and {len(ids) - limit} more" if len(ids) > limit else "")
+
+
+def compute_plan(want: dict, live: dict, have: dict) -> dict:
+    """Every step a switch would take, decided against the bar as it will be
+    at that step. Pure: no IPC, so the panel can describe every profile."""
+    all_wanted = [(s, w) for s in SECTIONS for w in want["sections"].get(s, [])]
+    missing = sorted({w for _, w in all_wanted if w not in have})
+    # Positions come from the profile *minus* what is not installed, so a
+    # skipped widget never shifts the widgets after it.
+    wanted = [(s, i, w) for s in SECTIONS
+              for i, w in enumerate([x for x in want["sections"].get(s, []) if x in have])]
+    wanted_ids = {w for _, _, w in wanted}
+    initial = {w: (s, i) for s in SECTIONS
+               for i, w in enumerate(live["sections"].get(s, []))}
+    removes = sorted(w for w in initial if w not in wanted_ids and w not in missing)
+    twins_live, twins_want = duplicate_ids(live), duplicate_ids(want)
+
+    # The shell's verbs splice a widget out and insert it at an index. Walking
+    # the target left→right while simulating the same splice makes each index
+    # land in a bar where every earlier position is already right.
+    sim = {sec: [w for w in live["sections"].get(sec, []) if w in wanted_ids] for sec in SECTIONS}
+    steps = []
+    for sec, idx, w in wanted:
+        where = next(((x, sim[x].index(w)) for x in SECTIONS if w in sim[x]), None)
+        if where == (sec, idx):
+            continue
+        if where:
+            sim[where[0]].pop(where[1])
+        slot = min(idx, len(sim[sec]))
+        sim[sec].insert(slot, w)
+        steps.append({"id": w, "section": sec, "index": slot,
+                      "verb": "move" if w in initial else "add",
+                      "from": where[0] if where else None,
+                      "fromIndex": where[1] if where else None})
+
+    zone_steps = []
+    if has_zones(want):
+        wz, lz = want["zones"], live.get("zones") or {}
+        for _, _, w in wanted:
+            target, current = wz.get(w, ""), lz.get(w, "")
+            if target != current:
+                zone_steps.append({"id": w, "verb": "zone", "zone": target, "from": current})
+
+    bar_change = want.get("barId") != live.get("barId")
+    blockers = {
+        "duplicatesLive": ("The bar has more than one copy of " + ", ".join(twins_live)
+                           + "; OmaGuard cannot tell copies apart, so it will not switch.")
+                          if twins_live else "",
+        "duplicatesProfile": ("This layout lists " + ", ".join(twins_want) + " more than once; "
+                              "the shell cannot place two copies of one widget.")
+                             if twins_want else "",
+        "barChange": (f"This layout was saved with a different bar style "
+                      f"({want.get('barId')}); OmaGuard will not change the bar style itself.")
+                     if bar_change else "",
+        "missing": ("This layout needs plugins that are not installed here: "
+                    + ", ".join(missing)) if missing else "",
+    }
+    adds = [x for x in steps if x["verb"] == "add"]
+    moves = [x for x in steps if x["verb"] == "move"]
+    words = []
+    if moves:
+        words.append("move " + plural(len(moves), "widget"))
+    if adds:
+        words.append("put back " + name_list(x["id"] for x in adds))
+    if removes:
+        words.append("take off " + name_list(removes))
+    if zone_steps:
+        words.append("re-pin " + plural(len(zone_steps), "widget"))
+    return {
+        "removes": removes, "adds": adds, "moves": moves, "steps": steps,
+        "zones": zone_steps, "missing": missing,
+        "duplicates": {"live": twins_live, "profile": twins_want},
+        "barChange": {"from": live.get("barId"), "to": want.get("barId")} if bar_change else None,
+        "blockers": blockers,
+        "blocked": any(blockers.values()),
+        "reason": " ".join(r for r in blockers.values() if r),
+        "summary": (" and ".join([", ".join(words[:-1]), words[-1]]) if len(words) > 1
+                    else (words[0] if words else "")),
+    }
+
+
+def profile_rows(data: dict, live: dict | None, have: dict) -> list[dict]:
     rows = []
     for p in data["profiles"]:
-        widgets = [w for s in SECTIONS for w in p["layout"]["sections"].get(s, [])]
+        layout = p["layout"]
+        widgets = [w for s in SECTIONS for w in layout["sections"].get(s, [])]
+        plan = compute_plan(layout, live, have) if live and have else None
+        active = bool(live) and same_layout(layout, live)
+        twins = [q["name"] for q in data["profiles"] if q is not p
+                 and layout_signature(q["layout"], has_zones(q["layout"]) and has_zones(layout))
+                 == layout_signature(layout, has_zones(q["layout"]) and has_zones(layout))]
         rows.append({
             "id": p["id"],
             "name": p["name"],
             "favorite": bool(p.get("favorite")),
             "created": p.get("created"),
             "updated": p.get("updated"),
-            "barId": p["layout"].get("barId"),
+            "barId": layout.get("barId"),
             "widgets": len(widgets),
-            # Named, not counted: "3 missing" is not something you can act on.
-            "missing": sorted(w for w in widgets if have and w not in have),
-            "active": signature is not None and layout_signature(p["layout"]) == signature,
+            "pinned": len(layout.get("zones") or {}),
+            "missing": plan["missing"] if plan else [],
+            "active": active,
+            # Saved before OmaGuard recorded pin zones: a switch can restore
+            # the order, never the pins, and the panel says so.
+            "incomplete": not has_zones(layout),
+            "sameAs": twins,
+            "blocked": bool(plan and plan["blocked"]),
+            "reason": plan["reason"] if plan else "The bar could not be read.",
+            "changes": plan["summary"] if plan else "",
+            "canSwitch": bool(plan) and not active and not plan["blocked"]
+                         and bool(plan["summary"]),
         })
     rows.sort(key=lambda r: (not r["favorite"], r["name"].lower()))
     return rows
@@ -807,11 +918,12 @@ def profiles_status() -> dict:
         error = ""
     except OmaGuardError as exc:
         live, error = None, str(exc)
+    have = installed_plugins()
     return {
-        "profiles": profile_rows(data, live),
+        "profiles": profile_rows(data, live, have),
         "live": live,
-        "liveError": error,
-        "canApply": bool(installed_plugins()),
+        "liveError": error or ("" if have else "The shell did not list its plugins, so switching is unavailable."),
+        "canApply": bool(have),
     }
 
 
@@ -828,11 +940,9 @@ def profile_save(name: str, pid: str = "") -> dict:
     twins = duplicate_ids(layout)
     if twins:
         raise OmaGuardError("The bar has more than one copy of " + ", ".join(twins)
-                         + ". OmaGuard switches widgets by id and cannot tell copies apart, "
-                         "so it will not save this bar as a profile.")
+                            + ". OmaGuard switches widgets by id and cannot tell copies apart, "
+                            "so it will not save this bar as a profile.")
     if pid:
-        # An overwrite keeps the profile's ID, so favourites, references and
-        # anything pointing at this profile survive a re-capture.
         target = find_profile(data, pid)
         target.update({"name": name, "layout": layout, "updated": now})
     else:
@@ -870,100 +980,23 @@ def profile_forget(pid: str) -> dict:
 
 
 def profile_plan(pid: str) -> dict:
-    """Exactly what switching would do, before anything is done. Every entry
-    names a widget — a plan you cannot read is not a plan you can approve."""
     data = load_profiles()
     target = find_profile(data, pid)
-    want, live = target["layout"], live_layout()
-    have = installed_plugins()
+    live, have = live_layout(), installed_plugins()
     if not have:
         raise OmaGuardError("The shell did not list any plugins, so a switch cannot be planned")
-
-    wanted = [(s, i, w) for s in SECTIONS
-              for i, w in enumerate(want["sections"].get(s, []))]
-    wanted_ids = {w for _, _, w in wanted}
-    initial = {w: (s, i) for s in SECTIONS
-               for i, w in enumerate(live["sections"].get(s, []))}
-
-    missing = sorted(w for _, _, w in wanted if w not in have)
-    removes = sorted(w for w in initial if w not in wanted_ids)
-    twins_live, twins_want = duplicate_ids(live), duplicate_ids(want)
-
-    # Decide every placement against the bar *as it will be at that step*,
-    # not as it was before the switch began. The shell's verbs splice a widget
-    # out and insert it at an index, so an add or move judged against the
-    # starting layout can land one slot off once an earlier step has shifted
-    # its neighbours — a switch that "succeeds" into the wrong order. Walking
-    # the target left→right while simulating the same splice semantics makes
-    # each index land in a bar where every earlier position is already right.
-    sim = {sec: [w for w in live["sections"].get(sec, []) if w in wanted_ids]
-           for sec in SECTIONS}
-    steps = []
-    for sec, idx, w in wanted:
-        if w not in have:
-            continue
-        where = next(((x, sim[x].index(w)) for x in SECTIONS if w in sim[x]), None)
-        # Every earlier slot in the target is already correct, so a widget is
-        # in place exactly when it sits at (section, index) right now.
-        if where == (sec, idx):
-            continue
-        if where:
-            # A widget still waiting to be placed can only sit at or after
-            # `idx` in its own section, so popping it never shifts the
-            # already-correct slots in front of it.
-            sim[where[0]].pop(where[1])
-        slot = min(idx, len(sim[sec]))
-        sim[sec].insert(slot, w)
-        steps.append({"id": w, "section": sec, "index": slot,
-                      "verb": "move" if w in initial else "add",
-                      "from": where[0] if where else None,
-                      "fromIndex": where[1] if where else None})
-    adds = [x for x in steps if x["verb"] == "add"]
-    moves = [x for x in steps if x["verb"] == "move"]
-
-    # Changing which bar plugin is running is a different, riskier operation
-    # than arranging widgets inside one. OmaGuard refuses it rather than doing it
-    # halfway.
-    bar_change = want.get("barId") != live.get("barId")
-    # One message per blocker, keyed by the check that raised it. A single
-    # shared reason once told a user to install a plugin when the switch was
-    # really refused because it was saved under a different bar.
-    blockers = {
-        "duplicatesLive": ("The bar has more than one copy of " + ", ".join(twins_live)
-                           + "; OmaGuard cannot tell copies apart, so it will not switch.")
-                          if twins_live else "",
-        "duplicatesProfile": ("This profile lists " + ", ".join(twins_want) + " more than once; "
-                              "the shell's controls cannot place two copies of one widget.")
-                             if twins_want else "",
-        "barChange": (f"This profile was saved under a different bar "
-                      f"({want.get('barId')}); OmaGuard will not switch the bar itself.")
-                     if bar_change else "",
-        "missing": ("This profile needs plugins that are not installed here: "
-                    + ", ".join(missing)) if missing else "",
-    }
-    return {
-        "profile": {"id": target["id"], "name": target["name"]},
-        "removes": removes, "adds": adds, "moves": moves,
-        # The exact order apply will use. adds/moves above are the same steps
-        # split by verb, kept for readers of the plan.
-        "steps": steps,
-        "missing": missing,
-        "barChange": {"from": live.get("barId"), "to": want.get("barId")} if bar_change else None,
-        "duplicates": {"live": twins_live, "profile": twins_want},
-        "blocked": bool(missing) or bar_change or bool(twins_live or twins_want),
-        "reason": " ".join(r for r in blockers.values() if r),
-        "blockers": blockers,
-        # Proven, not inferred: an empty step list can also mean "the planner
-        # cannot express what is wrong" (a duplicate it cannot address), and
-        # that once reported a two-copy bar as already correct.
-        "nothingToDo": layout_signature(live) == layout_signature(want),
-    }
+    plan = compute_plan(target["layout"], live, have)
+    plan["profile"] = {"id": target["id"], "name": target["name"]}
+    # Proven, not inferred: an empty step list can also mean "the planner
+    # cannot express what is wrong".
+    plan["nothingToDo"] = same_layout(target["layout"], live)
+    plan["incomplete"] = not has_zones(target["layout"])
+    return plan
 
 
 def profile_apply(pid: str, allow_partial: bool = False) -> dict:
-    """Apply a plan, one supported IPC call at a time, and report what each
-    one actually did. A failure part-way through is reported as a partial
-    switch with the remaining steps named — never as success."""
+    """Apply a plan one supported IPC call at a time and report what each
+    call did. A failure part-way is reported as partial — never as success."""
     plan = profile_plan(pid)
     b = plan["blockers"]
     for hard in ("duplicatesLive", "duplicatesProfile", "barChange"):
@@ -972,12 +1005,9 @@ def profile_apply(pid: str, allow_partial: bool = False) -> dict:
     if b["missing"] and not allow_partial:
         raise OmaGuardError(b["missing"] + ". Switch anyway to apply the rest.")
     if plan["nothingToDo"]:
-        # Same shape as a real switch. A reply that omits "exact" reads as
-        # "not exact" to anything checking it strictly, which turned every
-        # already-matching switch into a reported failure.
         return {"applied": True, "exact": True, "profile": plan["profile"],
-                "steps": [], "skipped": [],
-                "note": "This profile is already what the bar is showing."}
+                "steps": [], "skipped": [], "incomplete": plan["incomplete"],
+                "note": "This layout is already what the bar is showing."}
 
     steps: list[dict] = []
     failed = False
@@ -991,48 +1021,144 @@ def profile_apply(pid: str, allow_partial: bool = False) -> dict:
             answer = shell_ipc(args)
         except OmaGuardError as exc:
             answer = str(exc)
-        ok = answer == "ok" or answer == ""
+        ok = answer in ("ok", "")
         steps.append({"action": what, "id": widget, "result": answer or "ok", "ok": ok})
         if not ok:
             failed = True
 
-    # Remove first, so indices in the target layout are not fighting widgets
-    # that are on their way out.
     for widget in plan["removes"]:
         step("remove", widget, ["shell", "setPluginEnabled", widget, "false"])
-    # Then place, in target order, exactly as the plan simulated it.
     for entry in plan["steps"]:
         verb = "putBarWidget" if entry["verb"] == "add" else "moveBarWidget"
         step(entry["verb"], entry["id"], ["shell", verb, entry["id"],
                                           json.dumps({"section": entry["section"], "index": entry["index"]})])
+    for entry in plan["zones"]:
+        step("pin" if entry["zone"] else "unpin", entry["id"],
+             ["shell", "setBarWidget", entry["id"], "zone", json.dumps(entry["zone"]), "{}"])
+
     after = live_layout()
     target = find_profile(load_profiles(), pid)["layout"]
-    # With --allow-partial the user accepted the profile minus what is not
-    # installed, so that reduced bar is what "exact" is measured against.
     if plan["missing"]:
         gone = set(plan["missing"])
         target = {"barId": target.get("barId"),
                   "sections": {sec: [w for w in target["sections"].get(sec, []) if w not in gone]
-                               for sec in SECTIONS}}
-    matched = layout_signature(after) == layout_signature(target)
+                               for sec in SECTIONS},
+                  **({"zones": {w: z for w, z in target["zones"].items() if w not in gone}}
+                     if has_zones(target) else {})}
+    matched = same_layout(target, after)
+    name = plan["profile"]["name"]
+    if failed:
+        note = ("Stopped at the first failure. The bar is part-way between two layouts; "
+                "the steps below say exactly where.")
+    elif matched:
+        note = f"Switched to {name}."
+        if plan["missing"]:
+            note = f"Switched to {name} without {', '.join(plan['missing'])}, which is not installed here."
+        if plan["incomplete"]:
+            note += (" This layout was saved before OmaGuard remembered pinned widgets, so pins "
+                     "were left as they were.")
+    else:
+        note = "Applied, but the bar does not match the layout exactly — read the steps below."
     return {
         "applied": not failed,
         "exact": matched,
         "profile": plan["profile"],
         "steps": steps,
         "skipped": plan["missing"],
-        "note": (("Switched." if not plan["missing"] else
-                  "Switched without " + ", ".join(plan["missing"]) + ", which "
-                  + ("is" if len(plan["missing"]) == 1 else "are") + " not installed here.")
-                 if matched else
-                 "Applied, but the bar does not match the profile exactly — "
-                 "read the steps below.") if not failed else
-                "Stopped at the first failure. The bar is part-way between two "
-                "profiles; the steps below say exactly where.",
+        "incomplete": plan["incomplete"],
+        "note": note,
     }
 
 
-VERSION = "1.2.0"
+# ── Plain-language change summaries ─────────────────────────────────────
+def _lcs(a: list, b: list) -> set:
+    """Items on the longest common ordered subsequence: everything else moved."""
+    n, m = len(a), len(b)
+    t = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n - 1, -1, -1):
+        for j in range(m - 1, -1, -1):
+            t[i][j] = t[i + 1][j + 1] + 1 if a[i] == b[j] else max(t[i + 1][j], t[i][j + 1])
+    keep, i, j = set(), 0, 0
+    while i < n and j < m:
+        if a[i] == b[j]:
+            keep.add(a[i]); i += 1; j += 1
+        elif t[i + 1][j] >= t[i][j + 1]:
+            i += 1
+        else:
+            j += 1
+    return keep
+
+
+def summarize_change(file_id: str, before: dict, after: dict) -> list[str]:
+    """What changed, in words a person reads — not a diff."""
+    if before.get("status") != "present" and after.get("status") == "present":
+        return ["This file appeared"]
+    if before.get("status") == "present" and after.get("status") != "present":
+        return ["This file is gone"]
+    at, bt = before.get("text"), after.get("text")
+    if at is None or bt is None:
+        return ["This file could not be read"]
+    if file_id != "shell":
+        n = sum(1 for line in diff_text(at, bt).splitlines()
+                if line[:1] in "+-" and not line.startswith(("+++", "---")))
+        return [plural(n, "line") + " changed"]
+    try:
+        ad, bd = json.loads(at), json.loads(bt)
+    except ValueError:
+        return ["shell.json could not be parsed"]
+
+    def entries(doc):
+        lay = ((doc.get("bar") or {}).get("layout") or {}) if isinstance(doc, dict) else {}
+        found = {}
+        for sec in SECTIONS:
+            for e in lay.get(sec) or []:
+                if isinstance(e, dict) and isinstance(e.get("id"), str):
+                    found[e["id"]] = (sec, e)
+        return found, lay
+
+    ea, la = entries(ad)
+    eb, lb = entries(bd)
+    out = []
+    added = [w for w in eb if w not in ea]
+    removed = [w for w in ea if w not in eb]
+    if added:
+        out.append("Added to the bar: " + name_list(added))
+    if removed:
+        out.append("Taken off the bar: " + name_list(removed))
+    moved = [w for w in eb if w in ea and ea[w][0] != eb[w][0]]
+    for sec in SECTIONS:
+        sa = [e["id"] for e in la.get(sec) or [] if isinstance(e, dict) and e.get("id") in eb and eb[e["id"]][0] == sec]
+        sb = [e["id"] for e in lb.get(sec) or [] if isinstance(e, dict) and e.get("id") in ea and ea[e["id"]][0] == sec]
+        keep = _lcs(sa, sb)
+        moved += [w for w in sb if w not in keep]
+    moved = list(dict.fromkeys(moved))
+    if moved:
+        out.append(plural(len(moved), "widget") + " moved: " + name_list(moved))
+    pins = [w for w in eb if w in ea and (ea[w][1].get("zone") or "") != (eb[w][1].get("zone") or "")]
+    if pins:
+        out.append(plural(len(pins), "widget") + " pinned or unpinned: " + name_list(pins))
+    strip_keys = lambda e: {k: v for k, v in e.items() if k not in ("id", "zone")}
+    tweaked = [w for w in eb if w in ea and strip_keys(ea[w][1]) != strip_keys(eb[w][1])]
+    if tweaked:
+        out.append("Widget settings changed: " + name_list(tweaked))
+    if isinstance(ad, dict) and isinstance(bd, dict):
+        if (ad.get("bar") or {}).get("id") != (bd.get("bar") or {}).get("id"):
+            out.append("Bar style changed")
+        other = sorted(k for k in set(ad) | set(bd) if k != "bar" and ad.get(k) != bd.get(k))
+        if other:
+            out.append("Other shell settings changed: " + name_list(other))
+    return out or ["Formatting only — nothing that changes the bar"]
+
+
+def accept_current() -> dict:
+    """One click: take a snapshot of the setup as it is now and make it the
+    good setup. This is what clears a drift warning you agree with."""
+    snap = scan()
+    accept_baseline(snap["id"])
+    return status()
+
+
+VERSION = "1.3.0"
 
 
 def main(argv: list[str]) -> int:
@@ -1040,7 +1166,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("command",
                         choices=["scan", "status", "snapshot", "baseline", "preview", "forget",
                                  "profiles", "profile-save", "profile-rename", "profile-favorite",
-                                 "profile-forget", "profile-plan", "profile-apply"])
+                                 "profile-forget", "profile-plan", "profile-apply", "accept-current"])
     parser.add_argument("--id", default="")
     parser.add_argument("--file", default="")
     parser.add_argument("--name", default="")
@@ -1064,6 +1190,8 @@ def main(argv: list[str]) -> int:
         elif args.command == "baseline":
             accept_baseline(args.id)
             result = status()
+        elif args.command == "accept-current":
+            result = accept_current()
         elif args.command == "profiles":
             result = profiles_status()
         elif args.command == "profile-save":
