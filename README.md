@@ -28,7 +28,7 @@ tells you when something you rely on is actually broken — and how to fix it.
 ## What it looks like
 
 <p align="center">
-  <img src="docs/panel.png" alt="The OmaGuard panel open on a live Omarchy desktop, showing the layout list" width="620">
+  <img src="docs/panel.png" alt="The OmaGuard panel open on a live Omarchy desktop, showing the layout list after an Undo" width="610">
 </p>
 
 The shield sits on the left of the bar:
