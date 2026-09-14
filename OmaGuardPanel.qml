@@ -25,7 +25,7 @@ Panel {
     implicitWidth: barButton.implicitWidth
     implicitHeight: barButton.implicitHeight
 
-    readonly property string version: "1.5.1"
+    readonly property string version: "1.5.2"
     // New widgets on the bar join the loaded layout (additions only).
     readonly property bool autoAdd: setting("autoAddNewWidgets", true) !== false
     property var layoutState: ({layouts: [], problems: [], checks: [], unsavedChanges: []})

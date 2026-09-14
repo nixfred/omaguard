@@ -2,10 +2,9 @@
 """omaguard.py — OmaGuard's whole engine. python3 stdlib only, no pip, no bun.
 
 OmaGuard answers one question: *what changed in my desktop, and does what I
-chose on purpose still hold?* It captures six allowlisted config files,
-keeps a private timeline of every capture, compares the live compositor
-against what is saved on disk, and can show a precise before/after for a
-recovery.
+chose on purpose still hold?* It captures allowlisted config files, keeps a
+private timeline of every capture, compares the live compositor against what
+is saved on disk, and can show a precise before/after for a recovery.
 
 OmaGuard NEVER writes desktop config. Every restore is a PREVIEW. The only
 thing it writes is its own state under ~/.local/state/omaguard (0700/0600).
@@ -35,12 +34,18 @@ import uuid
 from pathlib import Path
 
 # ── Scope ────────────────────────────────────────────────────────────────
-# Six files, named explicitly. OmaGuard has no "read any path" mode: an
-# identifier the user cannot influence maps to a path, or nothing happens.
+# Named explicitly. OmaGuard has no "read any path" mode: an identifier the
+# user cannot influence maps to a path, or nothing happens.
+# clipboard.lua / keyboard-policy.lua are optional overlays some machines
+# still keep. Stock Omarchy user config uses looknfeel / monitors / autostart
+# instead; those are the files an agent actually tidies.
 FILES: dict[str, str] = {
     "hyprland": "hypr/hyprland.lua",
     "bindings": "hypr/bindings.lua",
     "input": "hypr/input.lua",
+    "looknfeel": "hypr/looknfeel.lua",
+    "monitors": "hypr/monitors.lua",
+    "autostart": "hypr/autostart.lua",
     "clipboard": "hypr/clipboard.lua",
     "keyboardPolicy": "hypr/keyboard-policy.lua",
     "shell": "omarchy/shell.json",
@@ -49,6 +54,9 @@ LABELS = {
     "hyprland": "Hyprland entry",
     "bindings": "Keybindings",
     "input": "Input / keyboard",
+    "looknfeel": "Look and feel",
+    "monitors": "Monitors",
+    "autostart": "Autostart",
     "clipboard": "Clipboard policy",
     "keyboardPolicy": "Keyboard policy",
     "shell": "Bar & plugins",
@@ -331,21 +339,31 @@ def build_checks(facts: dict, runtime: dict) -> list[dict]:
         add("Hyprland config", "unknown", "Hyprland could not be asked for config errors.")
 
     binds = runtime.get("binds", {}).get("data")
-    if facts["clipboard"]["status"] == "unknown":
-        add("Clipboard shortcuts", "n/a", "There is no clipboard.lua here, so no clipboard policy to hold.")
-    elif not isinstance(binds, list):
+    if not isinstance(binds, list):
         add("Clipboard shortcuts", "unknown",
-            "clipboard.lua exists, but Hyprland's live key bindings could not be read.")
+            "Hyprland's live key bindings could not be read.")
     else:
-        missing = [k for k in ("C", "X", "V")
-                   if not any(b.get("modmask") == 4 and str(b.get("key", "")).upper() == k for b in binds)]
-        if missing:
-            keys = ", ".join("Ctrl+" + k for k in missing)
+        def missing_chords(modmask: int) -> list[str]:
+            return [k for k in ("C", "X", "V")
+                    if not any(b.get("modmask") == modmask
+                               and str(b.get("key", "")).upper() == k for b in binds)]
+
+        missing_ctrl = missing_chords(4)
+        missing_super = missing_chords(64)
+        if not missing_ctrl:
+            add("Clipboard shortcuts", "ok",
+                "Ctrl+C, Ctrl+X and Ctrl+V are bound in the running desktop.")
+        elif not missing_super:
+            add("Clipboard shortcuts", "ok",
+                "Super+C, Super+X and Super+V are bound in the running desktop.")
+        elif facts["clipboard"]["status"] == "unknown":
+            add("Clipboard shortcuts", "n/a",
+                "There is no clipboard.lua here, and the running desktop has no Super+C/X/V or Ctrl+C/X/V clipboard binds.")
+        else:
+            keys = ", ".join("Ctrl+" + k for k in missing_ctrl)
             add("Clipboard shortcuts", "broken",
                 f"clipboard.lua is in your config, but the running desktop has nothing bound to {keys}.",
                 "Run: hyprctl reload. If it is still missing, the Hyprland config check will name the bad line.")
-        else:
-            add("Clipboard shortcuts", "ok", "Ctrl+C, Ctrl+X and Ctrl+V are bound in the running desktop.")
 
     kb = facts["keyboard"]
     wants_swap = any("altwin:swap_alt_win" in o.split(",") for o in kb["options"])
@@ -1435,7 +1453,7 @@ def accept_current() -> dict:
     return status()
 
 
-VERSION = "1.5.1"
+VERSION = "1.5.2"
 
 
 def main(argv: list[str]) -> int:

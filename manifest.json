@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "nixfred.omaguard",
   "name": "OmaGuard",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "author": "nixfred",
   "license": "MIT",
   "description": "A shield in the bar and your saved bar layouts in one click. Load a layout, and OmaGuard tells you when the bar has unsaved changes to it (Save, Undo, Save as new). The shield only counts problems the live desktop confirms, each with how to fix it.",
