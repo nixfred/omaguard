@@ -25,7 +25,7 @@ Panel {
     implicitWidth: barButton.implicitWidth
     implicitHeight: barButton.implicitHeight
 
-    readonly property string version: "1.5.0"
+    readonly property string version: "1.5.1"
     // New widgets on the bar join the loaded layout (additions only).
     readonly property bool autoAdd: setting("autoAddNewWidgets", true) !== false
     property var layoutState: ({layouts: [], problems: [], checks: [], unsavedChanges: []})
@@ -409,10 +409,15 @@ Panel {
                             id: actions
                             anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter }
                             spacing: 4
+                            // Always shown, so you never have to hunt for it. Greyed out
+                            // when loading would change nothing (the row note says why).
                             Button {
-                                visible: root.renameId !== modelData.id && !modelData.loaded && !modelData.active
+                                visible: root.renameId !== modelData.id
                                 text: "Load"
+                                // Not tied to busy: that flips every poll and would flicker
+                                // the button. A click while busy is queued, never dropped.
                                 enabled: modelData.canSwitch
+                                opacity: enabled ? 1 : 0.35
                                 onClicked: root.loadLayout(modelData)
                             }
                             // Take the bar as it is now into this layout, whichever one is
