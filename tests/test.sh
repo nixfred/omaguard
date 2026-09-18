@@ -39,6 +39,8 @@ svc = {"LoadState": "loaded", "ActiveState": "active", "UnitFileState": "enabled
 fixtures = {
     "rt_ok":       {"binds": ok(binds), "devices": ok(kbd), "configerrors": ok([""]), "service": ok(svc)},
     "rt_nov":      {"binds": ok([b for b in binds if b["key"] != "V"]), "devices": ok(kbd), "configerrors": ok([""]), "service": ok(svc)},
+    "rt_super":    {"binds": ok([{"modmask": 64, "key": k, "description": "Clipboard"} for k in "CXV"]), "devices": ok(kbd), "configerrors": ok([""]), "service": ok(svc)},
+    "rt_nobinds":  {"binds": ok([]), "devices": ok(kbd), "configerrors": ok([""]), "service": ok(svc)},
     "rt_unavail":  {"binds": na, "devices": na, "configerrors": na, "service": na},
     "rt_errors":   {"binds": ok(binds), "devices": ok(kbd), "configerrors": ok(["hyprland.lua:3: unknown option"]), "service": ok(svc)},
     "rt_noswap":   {"binds": ok(binds), "devices": ok({"keyboards": [{"name": "kbd", "options": "compose:caps"}]}), "configerrors": ok([""]), "service": ok(svc)},
@@ -77,7 +79,8 @@ echo; echo "── evidence, not guesses"
 check "swap read from the file"      "$(g status | jq_ 'd["latest"]["facts"]["keyboard"]["swapLiteral"]')" "True"
 check "commented decoy ignored"      "$(g status | jq_ 'd["latest"]["facts"]["keyboard"]["options"]')" "['altwin:swap_alt_win']"
 check "missing file is missing"      "$(g status | jq_ 'd["latest"]["files"]["clipboard"]["status"]')" "missing"
-check "missing file is not a pass"   "$(g status | jq_ '[c["status"] for c in d["latest"]["checks"] if c["name"]=="Clipboard shortcuts"][0]')" "n/a"
+check "stock overlay files are watched" "$(g status | jq_ 'd["latest"]["files"]["looknfeel"]["status"]')" "missing"
+check "live Ctrl chords still count without clipboard.lua" "$(g status | jq_ '[c["status"] for c in d["latest"]["checks"] if c["name"]=="Clipboard shortcuts"][0]')" "ok"
 
 echo; echo "── drift against an accepted reference"
 BASE=$(g status | jq_ 'd["timeline"][-1]["id"]')
@@ -377,6 +380,12 @@ check "can't-ask is never a problem"    "$(h rt_unavail | jq_ '(len(d["problems"
 check "config errors are a problem"     "$(h rt_errors | jq_ '[c["name"] for c in d["problems"]]')" "['Hyprland config']"
 check "a swap not applied is a problem" "$(h rt_noswap | jq_ '[c["name"] for c in d["problems"]]')" "['Alt / Super swap']"
 check "health writes nothing"           "$([ -e "$ROOT/h2state" ] && ls "$ROOT/h2state" | grep -c json || echo 0)" "0"
+s() { OMAGUARD_HOME="$OMAGUARD_HOME" OMAGUARD_STATE="$ROOT/sstate" OMAGUARD_RUNTIME="$ROOT/$1.json" python3 "$OMAGUARD" health; }
+check "stock Super+C/X/V is ok without clipboard.lua" "$(s rt_super | jq_ '[c["status"] for c in d["checks"] if c["name"]=="Clipboard shortcuts"][0]')" "ok"
+check "no live clipboard chords and no clipboard.lua is n/a" "$(s rt_nobinds | jq_ '[c["status"] for c in d["checks"] if c["name"]=="Clipboard shortcuts"][0]')" "n/a"
+printf '%s\n' '-- look' > "$OMAGUARD_HOME/.config/hypr/looknfeel.lua"
+look() { OMAGUARD_STATE="$ROOT/lookstate" python3 "$OMAGUARD" "$@"; }
+check "looknfeel is captured when present" "$(look scan >/dev/null; look status | jq_ 'd["latest"]["files"]["looknfeel"]["status"]')" "present"
 
 echo; echo "── layouts are your setups: load, unsaved changes, save, undo, save as"
 L() { OMAGUARD_STATE="$ROOT/lstate" python3 "$OMAGUARD" "$@"; }

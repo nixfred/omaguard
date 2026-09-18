@@ -80,7 +80,7 @@ configerrors` and `systemctl --user` — about what your config files say should
 | Check | A problem when |
 |---|---|
 | Hyprland config | Hyprland reports config errors |
-| Clipboard shortcuts | `clipboard.lua` exists but Ctrl+C, X or V is not bound in the running desktop |
+| Clipboard shortcuts | neither Ctrl+C/X/V nor Super+C/X/V is bound, and `clipboard.lua` exists |
 | Alt / Super swap | your config swaps them but no live keyboard has the swap |
 | Copy on select | the selection-copy service is installed but not running |
 
@@ -91,13 +91,16 @@ is judged by what Hyprland actually bound.
 
 ## History: snapshots, kept until you say otherwise
 
-**Details › history** keeps snapshots of the six config files OmaGuard reads:
+**Details › history** keeps snapshots of the allowlisted config files OmaGuard reads:
 
 ```
-~/.config/hypr/hyprland.lua        ~/.config/hypr/clipboard.lua
-~/.config/hypr/bindings.lua        ~/.config/hypr/keyboard-policy.lua
-~/.config/hypr/input.lua           ~/.config/omarchy/shell.json
+~/.config/hypr/hyprland.lua        ~/.config/hypr/looknfeel.lua
+~/.config/hypr/bindings.lua        ~/.config/hypr/monitors.lua
+~/.config/hypr/input.lua           ~/.config/hypr/autostart.lua
+~/.config/omarchy/shell.json
 ```
+
+`clipboard.lua` and `keyboard-policy.lua` are still watched if they exist. They are not part of current stock Omarchy user config. Packaged clipboard binds live in `/usr/share/omarchy/default/hypr/bindings/clipboard.lua` as Super+C/X/V, not Ctrl+C/X/V.
 
 **Take snapshot** stores one; nothing expires automatically. From a terminal you can compare a
 snapshot with another, and `preview` shows putting a single value back — never applied:
@@ -195,7 +198,7 @@ flowchart LR
 - OmaGuard **never writes desktop config** during capture or preview. Restores are previews.
 - Profile switching **does** change the bar — through the shell's supported IPC, one widget
   at a time, and only when you switch a bar layout.
-- Captures can include anything you put in those six files. They stay on this machine;
+- Captures can include anything you put in those allowlisted files. They stay on this machine;
   OmaGuard makes no network calls.
 - A good setup is your choice, not a certification. *Different* is not automatically *wrong*.
 
@@ -205,7 +208,7 @@ flowchart LR
 ./tests/test.sh
 ```
 
-102 checks against a throwaway `HOME` with a fake `omarchy-shell` on `PATH`, including 300
+123 checks against a throwaway `HOME` with a fake `omarchy-shell` on `PATH`, including 300
 random layout switches, pins included, that must each land exactly. The suite
 fingerprints your real OmaGuard state and `shell.json` before it starts and fails if either
 changes.
